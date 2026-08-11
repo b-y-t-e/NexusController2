@@ -86,6 +86,17 @@ lock (§6).
 
 ### `0x05` SCROLL — `dx:int8, dy:int8`
 
+### `0x06` CONFIG — the client reports its current configuration
+
+| offset | size | field |
+| --- | --- | --- |
+| 0 | 1 | opcode `0x06` |
+| 1 | 2 | uint16 body length `L` (max 16384) |
+| 3 | L | UTF-8 JSON, see §10 |
+
+Sent once immediately after `WELCOME`, and again whenever the user changes
+anything on the phone. This is what lets the PC show what each pad looks like.
+
 ### `0xF0` PING — `seq:uint32`
 
 ---
@@ -165,6 +176,7 @@ is required.
 | `0x1F` REJECT | `reason:uint8` | handshake refused, server closes immediately |
 | `0x03` RUMBLE | `large:uint8, small:uint8` | force feedback, `0`…`255` |
 | `0x12` LED | `r:uint8, g:uint8, b:uint8` | DS4 lightbar colour / Buzz lamp (non-zero = lamp on) |
+| `0x13` SET_CONFIG | `length:uint16, json:UTF-8` | push a configuration to the phone (§10) |
 | `0xF1` PONG | `seq:uint32` | echoes the `PING` sequence number |
 
 Reject reasons:
@@ -230,3 +242,88 @@ token per server IP so reconnects are automatic.
 * Max **1000 INPUT messages/second** per connection; excess is dropped and counted.
 * Max **5 failed handshakes per source IP per 60 s**, then `REJECT(0x06)` without
   even parsing the token.
+
+---
+
+## 10. Configuration documents (`0x06` / `0x13`)
+
+The phone's whole appearance and feel is a single JSON document. The client sends
+its own with `CONFIG`; the PC sends a replacement with `SET_CONFIG`. Both use the
+same schema, so a document captured from one phone can be pushed to another.
+
+```json
+{
+  "v": 1,
+  "type": "XBOX360",
+  "name": "Ania",
+  "screen": { "w": 2400, "h": 1080 },
+  "layout": {
+    "FACE":    { "x": 0.78, "y": 0.55, "s": 1.0, "r": 0 },
+    "L_STICK": { "x": 0.20, "y": 0.62, "s": 1.1, "r": 0 }
+  },
+  "settings": {
+    "haptics": true,
+    "hapticStrength": 0.85,
+    "gyro": false,
+    "gyroSensitivity": 0.4,
+    "touchVibration": true,
+    "theme": "Dark"
+  }
+}
+```
+
+### Rules
+
+* `v` is the schema version; a peer that does not recognise it ignores the whole
+  document rather than guessing.
+* `type` is the controller type name (`XBOX360`, `DUALSHOCK4`, `BUZZ`). Changing it
+  in a `SET_CONFIG` makes the client reconnect so the handshake announces the new
+  type.
+* **`x` and `y` are fractions of the usable screen, `0.0`–`1.0`, and address the
+  *centre* of the component.** They are deliberately *not* pixels: a layout authored
+  on the PC has to land in the same place on any phone. Values outside the range are
+  clamped by the receiver.
+* `s` is a scale multiplier, clamped to `0.5`–`3.0`. `r` is a rotation in degrees,
+  `-180`–`180`.
+* `screen` is informational — the phone reports its pixel size so the PC preview can
+  use the right aspect ratio. It is ignored in `SET_CONFIG`.
+* Unknown keys are preserved where practical and never cause a rejection. Unknown
+  component IDs in `layout` are dropped.
+* A `SET_CONFIG` that omits `layout` changes only the settings, and vice versa —
+  the receiver merges rather than replaces.
+
+### Component IDs and nominal sizes
+
+Nominal size is expressed as a fraction of screen **height** at `s = 1.0`, and is
+what the PC preview and the phone both use to draw a component.
+
+| Controller type | ID | Nominal size | Meaning |
+| --- | --- | --- | --- |
+| gamepad | `L_STICK`, `R_STICK` | 0.34 | analog sticks |
+| gamepad | `DPAD` | 0.30 | d-pad cluster |
+| gamepad | `FACE` | 0.30 | four face buttons |
+| gamepad | `L1`, `R1` | 0.13 | shoulder buttons |
+| gamepad | `L2`, `R2` | 0.15 | analog triggers |
+| gamepad | `SHARE`, `OPTIONS` | 0.09 | Back/Start, Share/Options |
+| gamepad | `PS` | 0.10 | Guide / PS button |
+| Buzz | `BUZZ_RED` | 0.38 | the big buzzer |
+| Buzz | `BUZZ_BLUE`, `BUZZ_ORANGE`, `BUZZ_GREEN`, `BUZZ_YELLOW` | 0.16 | answer buttons |
+
+`XBOX360` and `DUALSHOCK4` share the gamepad ID set — only the glyphs differ, so
+switching between them preserves the layout.
+
+### Flow
+
+```
+phone                                   PC
+  |  WELCOME received                    |
+  |  CONFIG (current appearance) ------->|  dashboard renders a live preview
+  |                                      |
+  |  user edits the layout on the PC     |
+  |<------------------------- SET_CONFIG |
+  |  apply + persist                     |
+  |  CONFIG (echo of what was applied) ->|  PC confirms it landed
+```
+
+The echo is what makes the PC's view authoritative: the dashboard only shows a
+change as applied once the phone has confirmed it.

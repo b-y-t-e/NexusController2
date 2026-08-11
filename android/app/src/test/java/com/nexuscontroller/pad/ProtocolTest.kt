@@ -3,6 +3,7 @@ package com.nexuscontroller.pad
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -184,6 +185,109 @@ class ProtocolTest {
         assertArrayEquals(byteArrayOf(0x04, -127, 127, 0x03), m)
         val s = Protocol.scroll(-128, 3)
         assertArrayEquals(byteArrayOf(0x05, -127, 3), s)
+    }
+
+    // ---------------------------------------------------------------- CONFIG / SET_CONFIG
+
+    @Test
+    fun `config opcodes match the spec`() {
+        assertEquals(0x06, Protocol.OP_CONFIG)
+        assertEquals(0x13, Protocol.OP_SET_CONFIG)
+        assertEquals(16384, Protocol.MAX_CONFIG_BYTES)
+    }
+
+    @Test
+    fun `config frames a small document byte for byte`() {
+        val p = Protocol.configJson("""{"v":1}""")
+        assertArrayEquals(
+            byteArrayOf(
+                0x06, 0x00, 0x07,
+                '{'.code.toByte(), '"'.code.toByte(), 'v'.code.toByte(), '"'.code.toByte(),
+                ':'.code.toByte(), '1'.code.toByte(), '}'.code.toByte()
+            ),
+            p
+        )
+    }
+
+    @Test
+    fun `config length is a big endian uint16`() {
+        // 300 bytes cannot be expressed in the single length byte TEXT uses.
+        val body = "x".repeat(300)
+        val p = Protocol.configJson(body)
+        assertEquals(Protocol.OP_CONFIG, p.u(0))
+        assertEquals(0x01, p.u(1))
+        assertEquals(0x2C, p.u(2))
+        assertEquals(300, Protocol.readUInt16(p, 1))
+        assertEquals(303, p.size)
+        assertEquals(body, String(p, 3, 300, Charsets.UTF_8))
+    }
+
+    @Test
+    fun `config length counts utf8 bytes and not characters`() {
+        val p = Protocol.configJson("ą".repeat(10))     // 2 bytes each
+        assertEquals(20, Protocol.readUInt16(p, 1))
+        assertEquals(23, p.size)
+    }
+
+    @Test
+    fun `config length reaches the whole uint16 range`() {
+        listOf(0, 1, 255, 256, 4096, Protocol.MAX_CONFIG_BYTES).forEach { n ->
+            val p = Protocol.configJson("x".repeat(n))
+            assertEquals("length $n", n, Protocol.readUInt16(p, 1))
+            assertEquals(n + 3, p.size)
+        }
+    }
+
+    @Test
+    fun `an empty config body is legal`() {
+        assertArrayEquals(byteArrayOf(0x06, 0x00, 0x00), Protocol.configJson(""))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `an over long config body is rejected rather than truncated`() {
+        Protocol.configJson("x".repeat(Protocol.MAX_CONFIG_BYTES + 1))
+    }
+
+    @Test
+    fun `configJsonOrNull drops an over long body instead of throwing`() {
+        assertNull(Protocol.configJsonOrNull("x".repeat(Protocol.MAX_CONFIG_BYTES + 1)))
+        // Multi-byte characters count for what they weigh on the wire.
+        assertNull(Protocol.configJsonOrNull("ą".repeat(Protocol.MAX_CONFIG_BYTES / 2 + 1)))
+        assertNotNull(Protocol.configJsonOrNull("x".repeat(Protocol.MAX_CONFIG_BYTES)))
+    }
+
+    @Test
+    fun `uint16 helpers round trip the full range`() {
+        listOf(0, 1, 255, 256, 4096, 16384, 65535).forEach { v ->
+            val buf = ByteArray(2)
+            Protocol.writeUInt16(buf, 0, v)
+            assertEquals(v, Protocol.readUInt16(buf, 0))
+        }
+    }
+
+    @Test
+    fun `a set_config body decodes as utf8`() {
+        // What the read loop does with the bytes that follow the uint16 length.
+        val json = """{"v":1,"name":"Ania ą"}"""
+        val framed = Protocol.configJson(json)
+        val length = Protocol.readUInt16(framed, 1)
+        val body = framed.copyOfRange(3, 3 + length)
+        assertEquals(json, Protocol.decodeConfigBody(body))
+    }
+
+    @Test
+    fun `a real configuration document fits the frame`() {
+        val doc = ConfigDocument(
+            type = ControllerType.XBOX360,
+            name = "Player 1",
+            screen = ScreenSize(2400, 1080),
+            layout = LayoutStore.defaults(ControllerType.XBOX360),
+            settings = ConfigSettings(true, 0.85f, false, 0.4f, true, "Dark")
+        )
+        val packet = Protocol.configJsonOrNull(ConfigCodec.encode(doc))
+        assertNotNull(packet)
+        assertEquals(Protocol.OP_CONFIG, packet!!.u(0))
+        assertEquals(packet.size - 3, Protocol.readUInt16(packet, 1))
     }
 
     // ---------------------------------------------------------------- WELCOME / REJECT

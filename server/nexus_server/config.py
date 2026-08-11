@@ -73,6 +73,9 @@ class Settings:
     theme: str = "cyan"
     #: ``{"0": {"a": "space", ...}}`` — pad button → keyboard key, per slot.
     key_bindings: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: Named pad layouts authored on the PC, ``{name: config document}``.
+    #: This is what makes configuration central: author once, push to any phone.
+    pad_profiles: dict[str, dict] = field(default_factory=dict)
 
     # -- validation ---------------------------------------------------------
 
@@ -90,6 +93,14 @@ class Settings:
             data["token"] = generate_token()
         if not isinstance(self.key_bindings, dict):
             data["key_bindings"] = {}
+        if not isinstance(self.pad_profiles, dict):
+            data["pad_profiles"] = {}
+        else:
+            data["pad_profiles"] = {
+                str(name)[:48]: value
+                for name, value in self.pad_profiles.items()
+                if isinstance(value, dict)
+            }
         return Settings(**data)
 
 

@@ -337,3 +337,119 @@ body.running .status-text { color: var(--accent); text-shadow: 0 0 18px var(--ac
   position: relative;
   z-index: 1;
 }
+
+/* --- pad rendering (shared by the card preview and the designer) --- */
+.pad-part {
+  position: absolute;
+  border: 1px solid var(--line);
+  background: #05080c;
+  color: var(--muted);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-family: var(--mono);
+  line-height: 1;
+  user-select: none;
+  transition: border-color .12s, color .12s, background .12s;
+}
+.pad-part.square { border-radius: 22%; }
+.pad-part span { pointer-events: none; transition: transform .05s linear; }
+.pad-part.active {
+  border-color: var(--part-color);
+  color: var(--part-color);
+  background: color-mix(in srgb, var(--part-color) 22%, #05080c);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--part-color) 45%, transparent);
+}
+.pad-part.has-fill::before {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: var(--fill, 0%);
+  background: color-mix(in srgb, var(--part-color) 40%, transparent);
+}
+
+.pad-mini {
+  position: relative;
+  width: 116px;
+  height: 62px;
+  background: #05080c;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  flex: none;
+}
+.pad-mini .pad-part { border-width: 1px; }
+.pad-mini-empty {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; font-size: 10px; color: var(--muted); font-family: var(--mono);
+}
+
+/* --- designer --- */
+.designer-card {
+  width: min(1080px, 96vw);
+  max-height: 92vh;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px 22px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.designer-card h2 { font-size: 15px; color: var(--text); text-transform: none; letter-spacing: .06em; margin: 0 0 4px; }
+.designer-body { display: grid; grid-template-columns: 1fr 264px; gap: 18px; margin-top: 14px; min-height: 0; }
+.designer-stage { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.phone-frame {
+  aspect-ratio: var(--aspect, 2.22);
+  width: 100%;
+  max-height: 62vh;
+  margin: 0 auto;
+  background: #020407;
+  border: 2px solid var(--line);
+  border-radius: 14px;
+  position: relative;
+  overflow: hidden;
+}
+.pad-canvas { position: absolute; inset: 0; touch-action: none; }
+.pad-canvas .pad-part { cursor: grab; }
+.pad-canvas .pad-part:active { cursor: grabbing; }
+.pad-canvas .pad-part.selected { border-color: #fbbf24; color: #fbbf24; box-shadow: 0 0 0 2px rgba(251,191,36,.35); }
+
+.designer-side { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; padding-right: 4px; }
+.side-block { display: flex; flex-direction: column; gap: 7px; }
+.side-block h3 {
+  font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--muted); margin: 0; font-weight: 600;
+}
+.side-row { display: flex; gap: 6px; }
+.side-row .btn { flex: 1; }
+.side-row input[type="text"] {
+  flex: 1; min-width: 0;
+  font: inherit; font-size: 12px;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
+}
+.segmented { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.segmented button {
+  flex: 1; font: inherit; font-size: 11px; padding: 7px 4px;
+  background: var(--panel-2); color: var(--muted); border: none; cursor: pointer;
+  border-right: 1px solid var(--line);
+}
+.segmented button:last-child { border-right: none; }
+.segmented button.on { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.selected-name { font-family: var(--mono); font-size: 12px; color: var(--accent); margin: 0; }
+.slider { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); }
+.slider b { color: var(--text); font-weight: 600; }
+.slider input { accent-color: var(--accent); width: 100%; }
+#profile-list {
+  font: inherit; font-family: var(--mono); font-size: 12px;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 7px; padding: 4px;
+}
+.designer-status { font-family: var(--mono); font-size: 11px; color: var(--accent); margin: 2px 0 0; min-height: 15px; }
+
+#driver-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#driver-banner .btn { border-color: rgba(251,191,36,.5); color: #fbbf24; padding: 4px 10px; font-size: 12px; }

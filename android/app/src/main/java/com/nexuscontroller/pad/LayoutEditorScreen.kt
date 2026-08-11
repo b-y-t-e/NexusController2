@@ -63,21 +63,24 @@ fun LayoutEditorScreen(
 
         // Workspace
         BoxWithConstraints(Modifier.fillMaxSize()) {
-            val w = maxWidth
-            val h = maxHeight
-            
-            // Render components
-            configs.keys.toList().forEach { id ->
-                val conf = configs[id]!!
-                EditableComponent(
-                    id = id,
-                    isEditMode = true,
-                    isSelected = selectedId == id,
-                    config = conf,
-                    onSelect = { selectedId = it },
-                    onDelete = { configs.remove(id); selectedId = null }
-                ) {
-                    RenderComponentShape(id, conf, isLight, controllerType)
+            val density = LocalDensity.current
+            val w = with(density) { maxWidth.toPx() }
+            val h = with(density) { maxHeight.toPx() }
+
+            // Placement is normalised, so every component needs the surface it sits on.
+            CompositionLocalProvider(LocalLayoutSurface provides LayoutSurface(w, h)) {
+                configs.keys.toList().forEach { id ->
+                    val conf = configs[id]!!
+                    EditableComponent(
+                        id = id,
+                        isEditMode = true,
+                        isSelected = selectedId == id,
+                        config = conf,
+                        onSelect = { selectedId = it },
+                        onDelete = { configs.remove(id); selectedId = null }
+                    ) {
+                        RenderComponentShape(id, conf, isLight, controllerType)
+                    }
                 }
             }
         }

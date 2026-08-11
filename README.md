@@ -17,6 +17,10 @@ controller for Windows, over Wi-Fi or USB.
 * **Four players** at once, one virtual pad each.
 * **Rumble** relayed from the game back to the phone.
 * **Pairing by QR code** with a rotating token — nothing on your network can connect without it.
+* **Central configuration.** See every connected pad live on the PC and rearrange
+  its buttons from there — drag them around, resize, rotate, then push the layout to
+  one phone or to all of them at once. Save layouts as named profiles. You never have
+  to touch the phones.
 * **Optional** mouse & keyboard control, off by default.
 * Works **completely offline**. The dashboard ships its own assets.
 
@@ -31,24 +35,27 @@ controller for Windows, over Wi-Fi or USB.
 
 ## Install (PC)
 
+**The easy way.** Download `NexusController.exe` from the
+[latest release](../../releases/latest) and run it. No Python, no terminal, nothing
+to configure. If the ViGEmBus driver is missing the app says so and offers an
+**Install driver** button — the installer is bundled inside the executable, so it
+works offline. Reboot once afterwards.
+
+Windows SmartScreen will warn about an unsigned download the first time: *More
+info → Run anyway*.
+
+**From source**, if you would rather:
+
 ```bat
-git clone <your-fork-url> NexusController
+git clone https://github.com/b-y-t-e/NexusController2 NexusController
 cd NexusController
 
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
-```
-
-Install **ViGEmBus** from the link above and reboot once. Without it the server still
-starts, but it runs in simulation mode and no controller appears in games.
-
-Then:
-
-```bat
 RunServer.bat
 ```
 
-Press **START SERVER**, and scan the QR code with the app.
+Either way: press **START SERVER**, then scan the QR code with the phone app.
 
 Administrator rights are only needed for two optional things: the automatic firewall
 rule, and the mouse/keyboard feature. If you would rather not run the server elevated,
@@ -81,6 +88,25 @@ Auto-discovery also finds servers on the same subnet (UDP broadcast on port 6001
 **USB** — enable USB debugging, plug the phone in, and start the server; it runs
 `adb reverse tcp:6000 tcp:6000` for you. In the app choose *USB* — it connects to
 `127.0.0.1`, which the reverse tunnel forwards to the PC.
+
+## Configuring pads from the PC
+
+Each player card in the dashboard shows a **live thumbnail** of that phone's actual
+layout, with buttons lighting up as they are pressed — so you can see at a glance
+what is connected and what it looks like.
+
+**Layout** opens the designer:
+
+* drag any control to move it, or select it and use the sliders to resize and rotate;
+* switch the controller type (Xbox 360 / DualShock 4 / Buzz) — the phone reconnects
+  itself to announce the change;
+* changes go to the phone as you make them (turn off *Apply changes live* if you
+  would rather push explicitly);
+* **Save** a layout as a named profile, then **Push to all connected** to put it on
+  every phone at once.
+
+Positions are stored as fractions of the screen rather than pixels, so one profile
+lands correctly on a small phone and a tablet alike.
 
 ## Buzz! mode
 
@@ -133,7 +159,7 @@ Even so: treat it like any LAN service. Do not run it on a network you do not tr
 
 ```bat
 .venv\Scripts\python -m pip install -r requirements-dev.txt
-.venv\Scripts\python -m pytest                    REM 321 tests, no hardware needed
+.venv\Scripts\python -m pytest                    REM 431 tests, no hardware needed
 .venv\Scripts\python tools\smoke_test.py          REM real ViGEmBus + XInput round-trip
 cd android && gradlew.bat testDebugUnitTest   REM 52 Kotlin tests
 ```
@@ -141,7 +167,7 @@ cd android && gradlew.bat testDebugUnitTest   REM 52 Kotlin tests
 `tests/test_client_compat.py` decodes the exact byte vectors asserted by the Kotlin
 suite, so the two implementations cannot drift apart without a test going red.
 
-The pytest suite (321 tests) runs against a fake pad backend, so it needs neither ViGEmBus nor a
+The pytest suite (431 tests) runs against a fake pad backend, so it needs neither ViGEmBus nor a
 phone. `tools/smoke_test.py` is the one that touches real hardware: it creates an actual
 virtual pad and reads it back through the Windows XInput API.
 
@@ -150,6 +176,7 @@ virtual pad and reads it back through the Windows XInput API.
 ```
 server/nexus_server/
   protocol.py   wire format — pure functions, no I/O
+  padconfig.py  pad layout documents pushed to phones
   devices.py    virtual pads (ViGEm-backed, plus a fake for tests)
   buzz.py       Buzz mapping and the reference HID report
   server.py     TCP server, handshake, discovery
@@ -158,6 +185,7 @@ server/nexus_server/
   config.py     settings in %APPDATA%\NexusController
   app.py        dashboard and CLI
   web/          dashboard assets (no CDN, no network)
+tools/build_exe.py  builds the single-file .exe, bundling ViGEmBus
 android/        Jetpack Compose client
 docs/PROTOCOL.md  the contract between the two
 tests/          pytest suite

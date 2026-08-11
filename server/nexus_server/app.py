@@ -14,6 +14,7 @@ import argparse
 import base64
 import io
 import logging
+import os
 import sys
 import threading
 import time
@@ -24,12 +25,35 @@ from .config import Settings, SettingsStore, generate_token
 from .desktop import DesktopControl, create_backend
 from .devices import DriverUnavailableError, FakeBackend, PadBackend, VGamepadBackend
 from .netinfo import local_ips
-from .protocol import DeviceType
+from .padconfig import PadConfig, describe_components
+from .protocol import DeviceType, ProtocolError
 from .server import ControllerServer
 
 log = logging.getLogger(__name__)
 
-WEB_DIR = Path(__file__).parent / "web"
+def _resource_dir() -> Path:
+    """Where bundled data lives, both from source and inside a frozen build.
+
+    PyInstaller unpacks a one-file build into a temporary directory and points
+    ``sys._MEIPASS`` at it, so paths relative to ``__file__`` are not enough.
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    return Path(base) if base else Path(__file__).parent
+
+
+WEB_DIR = _resource_dir() / "web" if getattr(sys, "frozen", False) else Path(__file__).parent / "web"
+#: ViGEmBus installer bundled at build time, if the build machine fetched it.
+#: Current releases ship a self-contained .exe; older ones shipped an .msi.
+_DRIVER_CANDIDATES = ("ViGEmBusSetup.exe", "ViGEmBusSetup.msi")
+
+
+def _bundled_driver() -> Path | None:
+    vendor = _resource_dir() / "vendor"
+    for name in _DRIVER_CANDIDATES:
+        candidate = vendor / name
+        if candidate.is_file():
+            return candidate
+    return None
 MAX_LOG_LINES = 200
 DRIVER_HELP_URL = "https://github.com/nefarius/ViGEmBus/releases/latest"
 
@@ -97,8 +121,13 @@ class Api:
                 "version": __version__,
                 "log": self.get_log(),
                 "device_types": [
-                    {"value": int(t), "label": t.label} for t in DeviceType
+                    {"value": int(t), "label": t.label, "name": t.name} for t in DeviceType
                 ],
+                # Static geometry tables, sent once per poll so the dashboard can
+                # draw any pad without a second round trip.
+                "component_sets": {
+                    t.name: describe_components(t) for t in DeviceType
+                },
             }
         )
         return state
@@ -234,6 +263,128 @@ class Api:
                 self.settings.key_bindings.get(str(slot), {})
             )
 
+    # -- central pad configuration -----------------------------------------
+
+    def get_pad_config(self, slot: int) -> dict:
+        """What this phone currently looks like, plus everything the editor needs."""
+        slot = int(slot)
+        session = (
+            self.server.slots.sessions[slot]
+            if 0 <= slot < len(self.server.slots)
+            else None
+        )
+        config = session.config if session and session.config else None
+        if config is None:
+            config = PadConfig.default(DeviceType(self.settings.default_device_type))
+        return {
+            "slot": slot,
+            "connected": bool(session and session.connected),
+            "reported": session.config is not None if session else False,
+            "config": config.to_dict(),
+            "aspect": round(config.aspect, 4),
+            "components": describe_components(config.device_type),
+            "profiles": sorted(self.settings.pad_profiles),
+        }
+
+    def get_components(self, device_type: str) -> list:
+        """Component metadata for a controller type, for the editor canvas."""
+        return describe_components(_device_type(device_type))
+
+    def push_pad_config(self, slot: int, document: dict) -> dict:
+        """Send an edited configuration to one phone."""
+        try:
+            config = PadConfig.from_dict(document)
+        except ProtocolError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not self.server.push_config(int(slot), config):
+            return {"ok": False, "error": "Player not connected"}
+        return {"ok": True}
+
+    def push_pad_config_to_all(self, document: dict) -> dict:
+        """Send one configuration to every connected phone."""
+        try:
+            config = PadConfig.from_dict(document)
+        except ProtocolError as exc:
+            return {"ok": False, "error": str(exc)}
+        sent = sum(
+            1
+            for session in self.server.slots.sessions
+            if session.connected and self.server.push_config(session.index, config)
+        )
+        if not sent:
+            return {"ok": False, "error": "No phone is connected"}
+        return {"ok": True, "sent": sent}
+
+    def set_pad_device_type(self, slot: int, device_type: str) -> dict:
+        """Change a phone's emulated controller type from the PC.
+
+        The layout is kept when the component set is the same (Xbox ↔ DualShock 4)
+        and reset to sensible defaults when it is not (either ↔ Buzz).
+        """
+        slot = int(slot)
+        if not 0 <= slot < len(self.server.slots):
+            return {"ok": False, "error": "No such slot"}
+        session = self.server.slots.sessions[slot]
+        current = session.config or PadConfig.default()
+        updated = current.with_device_type(_device_type(device_type))
+        if not self.server.push_config(slot, updated):
+            return {"ok": False, "error": "Player not connected"}
+        return {"ok": True, "config": updated.to_dict()}
+
+    def reset_pad_layout(self, slot: int) -> dict:
+        """Put a phone back to the default layout for its current type."""
+        slot = int(slot)
+        if not 0 <= slot < len(self.server.slots):
+            return {"ok": False, "error": "No such slot"}
+        session = self.server.slots.sessions[slot]
+        device_type = session.config.device_type if session.config else DeviceType.XBOX360
+        config = PadConfig.default(device_type, name=session.name)
+        if not self.server.push_config(slot, config):
+            return {"ok": False, "error": "Player not connected"}
+        return {"ok": True, "config": config.to_dict()}
+
+    # -- profile library ----------------------------------------------------
+
+    def list_profiles(self) -> list:
+        return sorted(self.settings.pad_profiles)
+
+    def save_profile(self, name: str, document: dict) -> dict:
+        name = str(name).strip()[:48]
+        if not name:
+            return {"ok": False, "error": "Profile needs a name"}
+        try:
+            config = PadConfig.from_dict(document)
+        except ProtocolError as exc:
+            return {"ok": False, "error": str(exc)}
+        self.settings.pad_profiles[name] = config.to_dict(include_screen=False)
+        self._persist()
+        self._append_log(f"Profile saved: {name}")
+        return {"ok": True, "profiles": sorted(self.settings.pad_profiles)}
+
+    def load_profile(self, name: str) -> dict:
+        document = self.settings.pad_profiles.get(str(name))
+        if document is None:
+            return {"ok": False, "error": "No such profile"}
+        return {"ok": True, "config": document}
+
+    def delete_profile(self, name: str) -> dict:
+        self.settings.pad_profiles.pop(str(name), None)
+        self._persist()
+        return {"ok": True, "profiles": sorted(self.settings.pad_profiles)}
+
+    def apply_profile(self, name: str, slot: int = -1) -> dict:
+        """Push a saved profile to one slot, or to every connected phone.
+
+        This is the point of the whole feature: author a layout once on the PC and
+        put it on every device without touching any of them.
+        """
+        document = self.settings.pad_profiles.get(str(name))
+        if document is None:
+            return {"ok": False, "error": "No such profile"}
+        if int(slot) >= 0:
+            return self.push_pad_config(int(slot), document)
+        return self.push_pad_config_to_all(document)
+
     def test_rumble(self, slot: int, strength: float = 0.6) -> bool:
         slot = int(slot)
         if not 0 <= slot < len(self.server.slots):
@@ -246,6 +397,39 @@ class Api:
 
         return session.send(encode_rumble(magnitude, magnitude))
 
+    def driver_status(self) -> dict:
+        """Whether ViGEmBus is usable, and whether we can install it ourselves."""
+        return {
+            "installed": not self.simulated,
+            "bundled": _bundled_driver() is not None,
+            "url": DRIVER_HELP_URL,
+        }
+
+    def install_driver(self) -> dict:
+        """Launch the bundled ViGEmBus installer, or fall back to the download page.
+
+        Installing a kernel driver needs elevation, so Windows shows its own UAC
+        prompt — we deliberately do not try to work around that.
+        """
+        installer = _bundled_driver()
+        if installer is None:
+            self.open_driver_page()
+            return {"ok": True, "launched": False, "message": "Opened the download page"}
+        command = (
+            ["msiexec", "/i", str(installer)]
+            if installer.suffix.lower() == ".msi"
+            else [str(installer)]
+        )
+        try:
+            import subprocess  # noqa: PLC0415
+
+            subprocess.Popen(command)  # noqa: S603 - fixed path from our own bundle
+        except OSError as exc:
+            self._append_log(f"Could not start the driver installer: {exc}")
+            return {"ok": False, "error": str(exc)}
+        self._append_log("ViGEmBus installer started — reboot afterwards, then restart this app")
+        return {"ok": True, "launched": True, "message": "Installer started"}
+
     def open_driver_page(self) -> None:
         import webbrowser  # noqa: PLC0415
 
@@ -256,6 +440,19 @@ class Api:
 
 
 # --- entry points -----------------------------------------------------------
+
+def _device_type(value) -> DeviceType:
+    """Accept a name (``"BUZZ"``) or a wire value from the dashboard."""
+    if isinstance(value, str):
+        try:
+            return DeviceType[value.strip().upper()]
+        except KeyError:
+            pass
+    try:
+        return DeviceType(int(value))
+    except (TypeError, ValueError):
+        return DeviceType.XBOX360
+
 
 def _make_backend(simulate: bool) -> tuple[PadBackend, bool, str | None]:
     """Return ``(backend, simulated, error)``."""

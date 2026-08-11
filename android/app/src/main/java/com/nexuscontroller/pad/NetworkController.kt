@@ -46,6 +46,11 @@ class NetworkController {
     var onWelcome: ((Welcome) -> Unit)? = null
     /** Fired when the server explicitly refuses the handshake. */
     var onRejected: ((RejectReason?) -> Unit)? = null
+    /**
+     * `0x13 SET_CONFIG` — the PC pushing a configuration document (§10). The raw JSON is
+     * handed over on the **main** thread, so the callback may touch Compose state directly.
+     */
+    var onSetConfig: ((String) -> Unit)? = null
 
     private val rootScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val generation = AtomicInteger(0)
@@ -209,6 +214,20 @@ class NetworkController {
                     val p = readFully(inp, 2)
                     main { onWelcome?.invoke(Protocol.parseWelcome(p[0].toInt(), p[1].toInt())) }
                 }
+                Protocol.OP_SET_CONFIG -> {
+                    // Length-prefixed, so an over-long or unusable body can be skipped without
+                    // desynchronising the stream — this one is not fatal.
+                    val header = readFully(inp, 2)
+                    val length = Protocol.readUInt16(header, 0)
+                    val body = readFully(inp, length)
+                    if (length > Protocol.MAX_CONFIG_BYTES) {
+                        Log.w(TAG, "SET_CONFIG of $length bytes exceeds the protocol limit, ignored")
+                    } else {
+                        val json = Protocol.decodeConfigBody(body)
+                        Log.d(TAG, "SET_CONFIG received, $length bytes")
+                        main { onSetConfig?.invoke(json) }
+                    }
+                }
                 Protocol.OP_REJECT -> {
                     val reasonCode = inp.read()
                     val reason = if (reasonCode >= 0) RejectReason.fromCode(reasonCode) else null
@@ -364,6 +383,21 @@ class NetworkController {
     fun sendText(text: String) {
         if (text.isEmpty()) return
         current?.otherChannel?.trySend(Protocol.text(text))
+    }
+
+    /**
+     * `0x06 CONFIG` — tells the PC what this pad currently looks like (§10).
+     * A document that does not fit the protocol's 16 KiB body is dropped with a log rather
+     * than truncated: half a layout is worse than none.
+     */
+    fun sendConfig(json: String) {
+        val conn = current ?: return
+        val packet = Protocol.configJsonOrNull(json)
+        if (packet == null) {
+            Log.w(TAG, "CONFIG document too large (${json.length} chars), not sent")
+            return
+        }
+        conn.otherChannel.trySend(packet)
     }
 
     private var mouseAccX = 0f

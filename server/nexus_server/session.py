@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from .desktop import KeyBindingEngine
 from .devices import VirtualPad
+from .padconfig import PadConfig
 from .protocol import DeviceType, InputState, axis_to_float
 
 log = logging.getLogger(__name__)
@@ -65,6 +66,10 @@ class PlayerSession:
         self.connected_at = 0.0
         self.visuals = Visuals()
         self.keys = KeyBindingEngine()
+        #: Last configuration the phone reported, or ``None`` until it does.
+        self.config: "PadConfig | None" = None
+        #: Set while a pushed config has not yet been echoed back by the phone.
+        self.config_pending = False
 
         # Mouse-mode gyro reference.
         self.gyro_centre: tuple[int, int] | None = None
@@ -110,6 +115,8 @@ class PlayerSession:
         self.visuals = Visuals()
         self.gyro_centre = None
         self.mouse_buttons_held = 0
+        self.config = None
+        self.config_pending = False
 
     # -- I/O ----------------------------------------------------------------
 
@@ -154,6 +161,8 @@ class PlayerSession:
                 "buttons_high": self.visuals.buttons_high,
             },
             "bindings": self.keys.bindings,
+            "config": self.config.to_dict() if self.config else None,
+            "config_pending": self.config_pending,
         }
 
 

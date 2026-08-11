@@ -34,6 +34,7 @@ class ClientOpcode(enum.IntEnum):
     TEXT = 0x02
     MOUSE = 0x04
     SCROLL = 0x05
+    CONFIG = 0x06
     HELLO = 0x10
     PING = 0xF0
 
@@ -42,6 +43,7 @@ class ServerOpcode(enum.IntEnum):
     RUMBLE = 0x03
     WELCOME = 0x11
     LED = 0x12
+    SET_CONFIG = 0x13
     REJECT = 0x1F
     PONG = 0xF1
 
@@ -320,6 +322,31 @@ def decode_ping(payload: bytes) -> int:
     if len(payload) != 4:
         raise ProtocolError("PING payload must be 4 bytes")
     return struct.unpack(">I", payload)[0]
+
+
+# --- configuration documents (§10) ------------------------------------------
+
+#: A configuration body is length-prefixed with a uint16 because layouts run to a
+#: few hundred bytes — comfortably past the 255-byte limit a single length byte
+#: would impose.
+MAX_CONFIG_BODY: Final = 16384
+
+
+def encode_set_config(body: bytes) -> bytes:
+    """Frame a SET_CONFIG message around an already-encoded UTF-8 body."""
+    if len(body) > MAX_CONFIG_BODY:
+        raise ProtocolError(f"config body too large: {len(body)} bytes")
+    return bytes([ServerOpcode.SET_CONFIG]) + struct.pack(">H", len(body)) + body
+
+
+def decode_config_length(header: bytes) -> int:
+    """Read the uint16 length that follows a CONFIG / SET_CONFIG opcode."""
+    if len(header) != 2:
+        raise ProtocolError("config length header must be 2 bytes")
+    length = struct.unpack(">H", header)[0]
+    if length > MAX_CONFIG_BODY:
+        raise ProtocolError(f"config body too large: {length} bytes")
+    return length
 
 
 # --- discovery --------------------------------------------------------------

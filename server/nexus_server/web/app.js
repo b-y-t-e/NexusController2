@@ -24,6 +24,8 @@ let modalSlot = 0;
 let pendingBind = null;
 let lastLogLength = 0;
 let ipsSignature = '';
+let componentSets = {};
+let lastPlayers = [];
 
 /* --- sparkline ---------------------------------------------------------- */
 
@@ -79,10 +81,7 @@ function playerCard(index) {
   node.className = 'player';
   node.id = 'player-' + index;
   node.innerHTML =
-    '<div class="stickpad">' +
-      '<div class="stick" id="stick-l-' + index + '" style="left:50%;top:50%"></div>' +
-      '<div class="stick r" id="stick-r-' + index + '" style="left:50%;top:50%"></div>' +
-    '</div>' +
+    '<div class="pad-mini" id="mini-' + index + '"></div>' +
     '<div>' +
       '<div class="player-name" id="pname-' + index + '">Player ' + (index + 1) + '</div>' +
       '<div class="player-meta" id="pmeta-' + index + '">offline</div>' +
@@ -93,7 +92,8 @@ function playerCard(index) {
     '</div>' +
     '<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">' +
       '<span class="dtype" id="dtype-' + index + '">—</span>' +
-      '<button class="btn btn-ghost btn-sm" data-config="' + index + '">Config</button>' +
+      '<button class="btn btn-ghost btn-sm" data-design="' + index + '">Layout</button>' +
+      '<button class="btn btn-ghost btn-sm" data-config="' + index + '">Keys</button>' +
     '</div>';
   return node;
 }
@@ -105,6 +105,9 @@ function renderPlayers(players) {
     players.forEach((_, index) => list.appendChild(playerCard(index)));
     list.querySelectorAll('[data-config]').forEach((button) => {
       button.addEventListener('click', () => openModal(Number(button.dataset.config)));
+    });
+    list.querySelectorAll('[data-design]').forEach((button) => {
+      button.addEventListener('click', () => openDesigner(Number(button.dataset.design)));
     });
   }
 
@@ -121,15 +124,20 @@ function renderPlayers(players) {
     $('dtype-' + index).textContent = player.connected ? player.device_label : '—';
 
     const visuals = player.visuals || {};
-    const place = (element, x, y) => {
-      element.style.left = (50 + (x || 0) * 42) + '%';
-      // Wire axes are "+Y = up"; screen coordinates grow downwards.
-      element.style.top = (50 - (y || 0) * 42) + '%';
-    };
-    place($('stick-l-' + index), visuals.lx, visuals.ly);
-    place($('stick-r-' + index), visuals.rx, visuals.ry);
     $('lt-' + index).style.width = ((visuals.lt || 0) * 100) + '%';
     $('rt-' + index).style.width = ((visuals.rt || 0) * 100) + '%';
+
+    // Live thumbnail of what this phone actually looks like right now.
+    const mini = $('mini-' + index);
+    if (player.connected && player.config) {
+      const set = componentSets[player.config.type] || [];
+      renderPad(mini, player.config, set, visuals, {});
+    } else if (mini._padNodes || !mini.firstChild) {
+      mini.innerHTML = '<div class="pad-mini-empty">' +
+        (player.connected ? 'waiting for layout' : 'offline') + '</div>';
+      mini._padNodes = null;
+      mini._padIds = null;
+    }
   });
 }
 
@@ -137,11 +145,13 @@ function renderPlayers(players) {
 
 function applyState(state) {
   running = state.running;
+  if (state.component_sets) componentSets = state.component_sets;
   slotCount = state.capacity;
   document.body.classList.toggle('running', running);
 
   $('version').textContent = 'v' + state.version;
   $('sim-badge').classList.toggle('hidden', !state.simulated);
+  $('driver-banner').classList.toggle('hidden', !state.simulated);
   $('status-text').textContent = running ? 'ONLINE' : 'OFF';
   $('status-sub').textContent = running
     ? state.ip + ':' + state.port
@@ -187,7 +197,9 @@ function applyState(state) {
   history.shift();
   drawChart();
 
+  lastPlayers = state.players;
   renderPlayers(state.players);
+  if (typeof designerOpen === 'function' && designerOpen()) drawDesigner();
 
   syncCheckbox($('haptics-toggle'), state.haptics);
   syncCheckbox($('desktop-toggle'), state.desktop_control);
@@ -253,6 +265,7 @@ function startBinding(id, button) {
 
 function onKeyDown(event) {
   if (pendingBind === null) return;
+  if ($('modal').classList.contains('hidden')) return;
   event.preventDefault();
   const id = pendingBind;
   pendingBind = null;
@@ -338,6 +351,19 @@ function wire() {
       document.body.dataset.theme = theme;
       api().set_theme(theme);
       drawChart();
+    });
+  });
+
+  wireDesigner();
+
+  $('driver-install').addEventListener('click', () => {
+    const button = $('driver-install');
+    button.disabled = true;
+    api().install_driver().then((result) => {
+      $('driver-text').textContent = result.ok
+        ? result.message + '. Reboot, then restart this app. '
+        : ('Could not start the installer: ' + result.error + ' ');
+      button.disabled = false;
     });
   });
 

@@ -8,9 +8,9 @@ import org.junit.Test
 class LayoutSerializationTest {
 
     private val layout = mapOf(
-        "FACE" to LayoutEntry(120.5f, 300.25f, 1.4f, 45f, 0, true),
-        "L_STICK" to LayoutEntry(-12f, 0f, 0.75f, -30.5f, 0, false),
-        "BTN_1" to LayoutEntry(10f, 20f, 1f, 0f, 65, false)
+        "FACE" to LayoutEntry(0.78f, 0.55f, 1.4f, 45f, 0, true),
+        "L_STICK" to LayoutEntry(0.2f, 0.62f, 0.75f, -30.5f, 0, false),
+        "BTN_1" to LayoutEntry(0.1f, 0.2f, 1f, 0f, 65, false)
     )
 
     @Test
@@ -37,7 +37,7 @@ class LayoutSerializationTest {
 
     @Test
     fun `buzz components round trip under their own ids`() {
-        val buzz = LayoutStore.BUZZ_IDS.associateWith { LayoutEntry(1f, 2f) }
+        val buzz = LayoutStore.BUZZ_IDS.associateWith { LayoutEntry(0.5f, 0.75f) }
         val decoded = LayoutSerializer.decode(LayoutSerializer.encode(buzz))
         assertEquals(LayoutStore.BUZZ_IDS.toSet(), decoded.keys)
     }
@@ -98,12 +98,42 @@ class LayoutSerializationTest {
     }
 
     @Test
+    fun `encode clamps every value into the protocol range`() {
+        val encoded = LayoutSerializer.encode(
+            mapOf("FACE" to LayoutEntry(4f, -2f, 99f, 900f))
+        )
+        val e = LayoutSerializer.decode(encoded).getValue("FACE")
+        assertEquals(1f, e.x, 0.001f)
+        assertEquals(0f, e.y, 0.001f)
+        assertEquals(LayoutBounds.MAX_SCALE, e.scale, 0.001f)
+        assertEquals(LayoutBounds.MAX_ROTATION, e.rotation, 0.001f)
+    }
+
+    @Test
+    fun `decode leaves legacy pixels alone so the migration can spot them`() {
+        // Clamping here would erase the evidence that these are pixels, not fractions.
+        val decoded = LayoutSerializer.decode("""{"FACE":{"x":1320,"y":648}}""")
+        assertEquals(1320f, decoded.getValue("FACE").x, 0.001f)
+    }
+
+    @Test
+    fun `defaults are normalised and screen independent`() {
+        ControllerType.entries.forEach { type ->
+            LayoutStore.defaults(type).forEach { (id, e) ->
+                assertTrue("$id x out of range: ${e.x}", e.x in 0f..1f)
+                assertTrue("$id y out of range: ${e.y}", e.y in 0f..1f)
+                assertTrue("$id scale out of range", e.scale in LayoutBounds.MIN_SCALE..LayoutBounds.MAX_SCALE)
+            }
+        }
+    }
+
+    @Test
     fun `defaults cover every component of each type`() {
-        val gamepad = LayoutStore.defaults(ControllerType.XBOX360, 1920f, 1080f)
+        val gamepad = LayoutStore.defaults(ControllerType.XBOX360)
         assertEquals(LayoutStore.GAMEPAD_IDS.toSet(), gamepad.keys)
-        val ds4 = LayoutStore.defaults(ControllerType.DUALSHOCK4, 1920f, 1080f)
+        val ds4 = LayoutStore.defaults(ControllerType.DUALSHOCK4)
         assertEquals(gamepad.keys, ds4.keys)
-        val buzz = LayoutStore.defaults(ControllerType.BUZZ, 1920f, 1080f)
+        val buzz = LayoutStore.defaults(ControllerType.BUZZ)
         assertEquals(LayoutStore.BUZZ_IDS.toSet(), buzz.keys)
         // No Buzz component may collide with a gamepad component id.
         assertTrue(buzz.keys.intersect(gamepad.keys).isEmpty())
@@ -111,7 +141,7 @@ class LayoutSerializationTest {
 
     @Test
     fun `keys with special characters survive`() {
-        val encoded = LayoutSerializer.encode(mapOf("BTN_\"q\"" to LayoutEntry(1f, 2f)))
+        val encoded = LayoutSerializer.encode(mapOf("BTN_\"q\"" to LayoutEntry(0.5f, 0.5f)))
         assertEquals(setOf("BTN_\"q\""), LayoutSerializer.decode(encoded).keys)
     }
 }

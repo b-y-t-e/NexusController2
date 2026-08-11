@@ -76,6 +76,7 @@ object Protocol {
     const val OP_TEXT = 0x02
     const val OP_MOUSE = 0x04
     const val OP_SCROLL = 0x05
+    const val OP_CONFIG = 0x06
     const val OP_HELLO = 0x10
     const val OP_PING = 0xF0
 
@@ -83,8 +84,12 @@ object Protocol {
     const val OP_RUMBLE = 0x03
     const val OP_WELCOME = 0x11
     const val OP_LED = 0x12
+    const val OP_SET_CONFIG = 0x13
     const val OP_REJECT = 0x1F
     const val OP_PONG = 0xF1
+
+    /** Largest JSON body either `0x06 CONFIG` or `0x13 SET_CONFIG` may carry (§10). */
+    const val MAX_CONFIG_BYTES = 16384
 
     /** INPUT flags byte (offset 12 of the payload). */
     const val FLAG_MOUSE_MODE = 0x01
@@ -219,6 +224,40 @@ object Protocol {
         writeUInt32(p, 1, seq)
         return p
     }
+
+    /**
+     * `0x06 CONFIG`: opcode, big-endian uint16 body length, then the UTF-8 JSON of §10.
+     *
+     * Unlike [text] the body is *not* silently truncated — a half document would parse into
+     * a layout nobody asked for — so an over-long body is rejected outright.
+     */
+    fun configJson(json: String): ByteArray {
+        val body = json.toByteArray(Charsets.UTF_8)
+        require(body.size <= MAX_CONFIG_BYTES) {
+            "CONFIG body is ${body.size} bytes, the protocol allows $MAX_CONFIG_BYTES"
+        }
+        val p = ByteArray(3 + body.size)
+        p[0] = OP_CONFIG.toByte()
+        writeUInt16(p, 1, body.size)
+        body.copyInto(p, 3)
+        return p
+    }
+
+    /** [configJson] for callers that would rather drop a document than crash. */
+    fun configJsonOrNull(json: String): ByteArray? =
+        if (json.toByteArray(Charsets.UTF_8).size > MAX_CONFIG_BYTES) null else configJson(json)
+
+    /** Body of `0x06`/`0x13`, decoded as UTF-8. Malformed sequences become U+FFFD, never throw. */
+    fun decodeConfigBody(body: ByteArray): String = String(body, Charsets.UTF_8)
+
+    fun writeUInt16(target: ByteArray, offset: Int, value: Int) {
+        val v = value and 0xFFFF
+        target[offset] = (v ushr 8).toByte()
+        target[offset + 1] = v.toByte()
+    }
+
+    fun readUInt16(source: ByteArray, offset: Int): Int =
+        ((source[offset].toInt() and 0xFF) shl 8) or (source[offset + 1].toInt() and 0xFF)
 
     fun writeUInt32(target: ByteArray, offset: Int, value: Long) {
         val v = value and 0xFFFFFFFFL

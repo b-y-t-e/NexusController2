@@ -144,7 +144,29 @@ object Glyphs {
         }
 }
 
-/** Layout config for one on-screen component, as observable Compose state. */
+/**
+ * Size of the surface components are placed on, in pixels.
+ *
+ * Placement is normalised (PROTOCOL.md §10), so every component needs to know how big the
+ * play area is. Both the play screen and the layout editor publish their measured
+ * `BoxWithConstraints` here; the fallback exists only so a preview cannot divide by zero.
+ */
+data class LayoutSurface(val width: Float, val height: Float) {
+    val isMeasured: Boolean get() = width > 0f && height > 0f
+    val safeWidth: Float get() = width.coerceAtLeast(1f)
+    val safeHeight: Float get() = height.coerceAtLeast(1f)
+}
+
+val LocalLayoutSurface = compositionLocalOf { LayoutSurface(0f, 0f) }
+
+/**
+ * Layout config for one on-screen component, as observable Compose state.
+ *
+ * [x] and [y] are the **normalised centre** of the component — fractions of the play surface
+ * in `0..1`, exactly as PROTOCOL.md §10 defines them — not pixels and not a corner. The
+ * conversion to a pixel top-left happens at draw time in [EditableComponent], where the
+ * component's own measured size is known.
+ */
 class CompConfig(
     initialX: Float,
     initialY: Float,
@@ -165,8 +187,10 @@ class CompConfig(
     fun toEntry() = LayoutEntry(x, y, scale, rotation, mappedKey, isTurbo)
 
     companion object {
-        fun from(entry: LayoutEntry) =
-            CompConfig(entry.x, entry.y, entry.scale, entry.rotation, entry.mappedKey, entry.isTurbo)
+        fun from(entry: LayoutEntry): CompConfig {
+            val e = LayoutBounds.clamp(entry)
+            return CompConfig(e.x, e.y, e.scale, e.rotation, e.mappedKey, e.isTurbo)
+        }
     }
 }
 
@@ -180,16 +204,32 @@ fun EditableComponent(
     onDelete: () -> Unit = {},
     content: @Composable () -> Unit
 ) {
+    val surface = LocalLayoutSurface.current
+    // The intrinsic (unscaled) size of the component: `scale` and `rotate` are draw-only, so
+    // the measured box is what the normalised centre has to be resolved against.
+    var measured by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+
     Box(
         modifier = Modifier
-            .offset { IntOffset(config.x.roundToInt(), config.y.roundToInt()) }
+            .onSizeChanged { measured = it }
+            .offset {
+                // Until the first measurement lands, fall back to the nominal footprint of
+                // PROTOCOL.md §10 — the same number the PC preview uses for this component.
+                val nominal = ComponentSizes.nominalPx(id, surface.safeHeight)
+                val cw = if (measured.width > 0) measured.width.toFloat() else nominal
+                val ch = if (measured.height > 0) measured.height.toFloat() else nominal
+                IntOffset(
+                    (config.x * surface.safeWidth - cw / 2f).roundToInt(),
+                    (config.y * surface.safeHeight - ch / 2f).roundToInt()
+                )
+            }
             .rotate(config.rotation)
             .scale(config.scale)
             // The gesture nodes sit inside both graphics layers, so `pan` arrives in the
-            // component's own (scaled, rotated) space. `offset` above is in parent pixels,
-            // so map local -> parent with the same transform: rotate(scale(pan)).
+            // component's own (scaled, rotated) space. Map local -> parent with the same
+            // transform — rotate(scale(pan)) — then to a fraction of the surface.
             .pointerInput(isEditMode) { if (isEditMode) detectTapGestures { onSelect(id) } }
-            .pointerInput(isEditMode) {
+            .pointerInput(isEditMode, surface) {
                 if (isEditMode) {
                     detectTransformGestures { _, pan, _, _ ->
                         if (!isSelected) onSelect(id)
@@ -198,8 +238,12 @@ fun EditableComponent(
                         val rad = Math.toRadians(config.rotation.toDouble())
                         val c = cos(rad).toFloat()
                         val s = sin(rad).toFloat()
-                        config.x += sx * c - sy * s
-                        config.y += sx * s + sy * c
+                        config.x = LayoutBounds.position(
+                            config.x + (sx * c - sy * s) / surface.safeWidth
+                        )
+                        config.y = LayoutBounds.position(
+                            config.y + (sx * s + sy * c) / surface.safeHeight
+                        )
                     }
                 }
             }

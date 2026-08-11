@@ -14,6 +14,7 @@ from .config import Settings
 from .desktop import DesktopControl, gyro_to_mouse
 from .devices import DriverUnavailableError, PadBackend, VirtualPad
 from .netinfo import primary_ip
+from .padconfig import PadConfig
 from .protocol import (
     ClientOpcode,
     DeviceType,
@@ -376,11 +377,54 @@ class ControllerServer:
             elif opcode == ClientOpcode.SCROLL:
                 self.desktop.handle_scroll(session.index, ScrollDelta.decode(reader.read(2)))
 
+            elif opcode == ClientOpcode.CONFIG:
+                length = P.decode_config_length(reader.read(2))
+                self._receive_config(session, reader.read(length) if length else b"{}")
+
             else:
                 # Unknown opcodes have unknown lengths, so the stream can no
                 # longer be framed — the only safe response is to hang up.
                 self._log(f"Slot {session.index + 1}: unknown opcode 0x{opcode:02x}, closing")
                 return
+
+    # -- configuration ------------------------------------------------------
+
+    def _receive_config(self, session: PlayerSession, body: bytes) -> None:
+        """Store what the phone says it currently looks like.
+
+        A malformed document is logged and dropped: a phone with a broken config
+        must not lose its connection over cosmetics.
+        """
+        try:
+            session.config = PadConfig.from_json(body).filled()
+        except ProtocolError as exc:
+            self._log(f"Slot {session.index + 1}: ignoring bad config ({exc})")
+            return
+        session.config_pending = False
+        self._log(f"Slot {session.index + 1}: layout reported ({session.config.device_type.label})")
+
+    def push_config(self, slot: int, config: PadConfig) -> bool:
+        """Send a configuration to one connected phone.
+
+        Returns ``False`` when the slot is empty or the write fails. The phone
+        echoes a CONFIG back, which is what clears ``config_pending``.
+        """
+        if not 0 <= slot < len(self.slots):
+            return False
+        session = self.slots.sessions[slot]
+        if not session.connected:
+            return False
+        try:
+            message = P.encode_set_config(config.encode_body())
+        except ProtocolError as exc:
+            self._log(f"Cannot push config to slot {slot + 1}: {exc}")
+            return False
+        session.config_pending = True
+        if not session.send(message):
+            session.config_pending = False
+            return False
+        self._log(f"Slot {slot + 1}: configuration pushed from PC")
+        return True
 
     # -- input application --------------------------------------------------
 

@@ -25,6 +25,11 @@
   </div>
 </header>
 
+<div class="banner hidden" id="driver-banner">
+  <span id="driver-text">ViGEmBus driver is not installed, so no controller is created. </span>
+  <button class="btn btn-sm" id="driver-install">Install driver</button>
+</div>
+
 <div class="banner hidden" id="xinput-banner"></div>
 
 <main class="layout">
@@ -130,6 +135,74 @@
   </div>
 </div>
 
+<div class="modal hidden" id="designer">
+  <div class="designer-card">
+    <button class="modal-close" id="designer-close" aria-label="Close">&times;</button>
+    <h2 id="designer-title">Pad designer</h2>
+    <p class="muted small" id="designer-sub">Drag the controls to arrange the pad, then push it to the phone.</p>
+
+    <div class="designer-body">
+      <div class="designer-stage">
+        <div class="phone-frame" id="phone-frame">
+          <div class="pad-canvas" id="pad-canvas"></div>
+        </div>
+        <p class="muted small" id="designer-hint">&nbsp;</p>
+      </div>
+
+      <aside class="designer-side">
+        <div class="side-block">
+          <h3>Controller type</h3>
+          <div class="segmented" id="type-switch">
+            <button data-type="XBOX360">Xbox 360</button>
+            <button data-type="DUALSHOCK4">DualShock 4</button>
+            <button data-type="BUZZ">Buzz</button>
+          </div>
+        </div>
+
+        <div class="side-block">
+          <h3>Selected control</h3>
+          <p class="selected-name" id="selected-name">nothing selected</p>
+          <label class="slider">
+            <span>Size <b id="scale-value">1.00</b></span>
+            <input type="range" id="scale-range" min="0.5" max="3" step="0.05" value="1" disabled>
+          </label>
+          <label class="slider">
+            <span>Rotation <b id="rot-value">0°</b></span>
+            <input type="range" id="rot-range" min="-180" max="180" step="5" value="0" disabled>
+          </label>
+        </div>
+
+        <div class="side-block">
+          <h3>Profiles</h3>
+          <select id="profile-list" size="4"></select>
+          <div class="side-row">
+            <button class="btn btn-ghost btn-sm" id="profile-load">Load</button>
+            <button class="btn btn-ghost btn-sm" id="profile-delete">Delete</button>
+          </div>
+          <div class="side-row">
+            <input type="text" id="profile-name" placeholder="Profile name" maxlength="48">
+            <button class="btn btn-ghost btn-sm" id="profile-save">Save</button>
+          </div>
+        </div>
+
+        <div class="side-block">
+          <h3>Apply</h3>
+          <button class="btn btn-primary" id="push-one">Push to this phone</button>
+          <button class="btn btn-ghost" id="push-all">Push to all connected</button>
+          <button class="btn btn-ghost" id="reset-layout">Reset to default</button>
+          <label class="check">
+            <input type="checkbox" id="live-push" checked>
+            <span>Apply changes live</span>
+          </label>
+          <p class="designer-status" id="designer-status">&nbsp;</p>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<script src="pad.js"></script>
 <script src="app.js"></script>
+<script src="designer.js"></script>
 </body>
 </html>

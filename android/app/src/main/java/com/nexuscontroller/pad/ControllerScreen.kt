@@ -80,7 +80,9 @@ fun PSControllerScreen(
     onSendText: (String) -> Unit,
     triggerReset: Boolean,
     onResetDone: () -> Unit,
-    onVibrate: () -> Unit
+    onVibrate: () -> Unit,
+    /** Reports the measured play surface in pixels; §10 documents carry it as `screen`. */
+    onSurfaceMeasured: (Float, Float) -> Unit = { _, _ -> }
 ) {
     val scope = rememberCoroutineScope()
     val currentGyroRoll by rememberUpdatedState(gyroRoll)
@@ -304,9 +306,11 @@ fun PSControllerScreen(
                 val w = with(density) { maxWidth.toPx() }
                 val h = with(density) { maxHeight.toPx() }
 
+                LaunchedEffect(w, h) { if (w > 0 && h > 0) onSurfaceMeasured(w, h) }
+
                 LaunchedEffect(triggerReset, configs.isEmpty(), controllerType, w) {
                     if (w > 0 && (triggerReset || configs.isEmpty())) {
-                        val newDefaults = LayoutStore.defaults(controllerType, w, h)
+                        val newDefaults = LayoutStore.defaults(controllerType)
                         configs.clear()
                         newDefaults.forEach { (id, entry) -> configs[id] = CompConfig.from(entry) }
                         onSave()
@@ -314,10 +318,11 @@ fun PSControllerScreen(
                     }
                 }
 
-                val getConf = { id: String -> configs[id] ?: CompConfig(0f, 0f) }
+                val getConf = { id: String -> configs[id] ?: CompConfig(0.5f, 0.5f) }
 
                 if (isEditMode) EditorGridBackground(themeMode == "Light")
 
+                CompositionLocalProvider(LocalLayoutSurface provides LayoutSurface(w, h)) {
                 if (controllerType == ControllerType.BUZZ) {
                     BuzzLayout(
                         configs = configs,
@@ -419,6 +424,7 @@ fun PSControllerScreen(
                             }
                         }
                     }
+                }
                 }
 
                 if (isEditMode && selectedId != null) {
@@ -527,7 +533,7 @@ private fun BuzzLayout(
     onVibrate: () -> Unit,
     onButton: (String, Int, Boolean) -> Unit
 ) {
-    val getConf = { id: String -> configs[id] ?: CompConfig(0f, 0f) }
+    val getConf = { id: String -> configs[id] ?: CompConfig(0.5f, 0.5f) }
 
     EditableComponent("BUZZ_RED", isEditMode, selectedId == "BUZZ_RED", getConf("BUZZ_RED"), onSelect) {
         BuzzBuzzerButton(onVibrate) { mask, pressed -> onButton("BUZZ_RED", mask, pressed) }

@@ -29,6 +29,7 @@ import androidx.compose.ui.zIndex
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity(), SensorEventListener {
 
@@ -47,7 +48,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("layout_prefs", MODE_PRIVATE)
         profilesPrefs = getSharedPreferences("profiles_list", MODE_PRIVATE)
-        layoutStore = LayoutStore(prefs, profilesPrefs)
+        // The display size is only needed to migrate pixel-based layouts written by older
+        // builds; the composable refines it with the real play surface once it is measured.
+        layoutStore = LayoutStore(prefs, profilesPrefs, displayScreenSize())
 
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
@@ -101,6 +104,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             val currentHapticEnabled by rememberUpdatedState(hapticEnabled)
             val currentHapticStrength by rememberUpdatedState(hapticStrength)
 
+            // Ticked by every accepted handshake; §10 wants a CONFIG straight after WELCOME.
+            var welcomeTick by remember { mutableIntStateOf(0) }
+
             DisposableEffect(Unit) {
                 networkController.onStateChanged = { state ->
                     isConnected = state == NetworkController.State.CONNECTED
@@ -116,6 +122,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 }
                 networkController.onWelcome = { welcome ->
                     globalToastMessage = "Connected as player ${welcome.slot + 1}"
+                    welcomeTick++
                 }
                 networkController.onRejected = { reason ->
                     // Retrying a bad token or a rate limit only makes things worse.
@@ -165,6 +172,112 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             var showNameDialog by remember { mutableStateOf(false) }
             val tempConfigsForSave = remember { mutableMapOf<String, CompConfig>() }
 
+            // ---- configuration documents (PROTOCOL.md §10) ----
+
+            var screenSize by remember { mutableStateOf(layoutStore.screen) }
+            // Bumped whenever something the PC should know about changed; the debounced sender
+            // below turns a burst of edits into a single CONFIG.
+            var configRevision by remember { mutableIntStateOf(0) }
+
+            fun currentConfigDocument(): ConfigDocument = ConfigDocument(
+                version = ConfigCodec.SCHEMA_VERSION,
+                type = controllerType,
+                name = deviceName,
+                screen = screenSize,
+                layout = configs.mapValues { it.value.toEntry() },
+                settings = ConfigSettings(
+                    haptics = hapticEnabled,
+                    hapticStrength = hapticStrength,
+                    gyro = gyroEnabled,
+                    gyroSensitivity = gyroSensitivity,
+                    touchVibration = touchVibration,
+                    theme = themeMode
+                )
+            )
+
+            fun sendConfigNow() {
+                networkController.sendConfig(ConfigCodec.encode(currentConfigDocument()))
+            }
+
+            LaunchedEffect(welcomeTick) { if (welcomeTick > 0) sendConfigNow() }
+
+            // §10: report the current appearance right after WELCOME, then after every change.
+            // Debounced, because dragging a component produces a change per frame.
+            LaunchedEffect(
+                isConnected, configRevision, screenSize, controllerType, deviceName, themeMode,
+                hapticEnabled, hapticStrength, gyroEnabled, gyroSensitivity, touchVibration
+            ) {
+                if (!isConnected) return@LaunchedEffect
+                kotlinx.coroutines.delay(CONFIG_DEBOUNCE_MS)
+                sendConfigNow()
+            }
+
+            fun applyPushedSettings(s: ConfigSettings) {
+                val editor = prefs.edit()
+                s.theme?.let { themeMode = it; editor.putString("theme_mode", it) }
+                s.haptics?.let { hapticEnabled = it; editor.putBoolean("haptic_enabled", it) }
+                s.hapticStrength?.let { hapticStrength = it; editor.putFloat("haptic_strength", it) }
+                s.gyro?.let { gyroEnabled = it; editor.putBoolean("gyro_enabled", it) }
+                s.gyroSensitivity?.let { gyroSensitivity = it; editor.putFloat("gyro_sensitivity", it) }
+                s.touchVibration?.let { touchVibration = it; editor.putBoolean("touch_vibration", it) }
+                editor.apply()
+            }
+
+            /**
+             * Applies a `SET_CONFIG` pushed from the PC and persists it. Whatever the document
+             * does not mention is left exactly as it was, and an echo is scheduled so the PC
+             * can confirm what actually landed.
+             */
+            fun applyPushedConfig(doc: ConfigDocument) {
+                val newType = doc.type ?: controllerType
+                val typeChanged = newType != controllerType
+
+                if (doc.layout != null) {
+                    val stored = if (typeChanged) layoutStore.loadEntries(currentProfileName, newType)
+                    else configs.mapValues { it.value.toEntry() }
+                    val base = stored.ifEmpty { LayoutStore.defaults(newType) }
+                    val merged = ConfigCodec.mergeLayout(base, doc.layout, newType)
+                    layoutStore.saveEntries(merged, currentProfileName, newType)
+                    if (!typeChanged) {
+                        configs.clear()
+                        merged.forEach { (id, entry) -> configs[id] = CompConfig.from(entry) }
+                    }
+                }
+
+                doc.settings?.let { applyPushedSettings(it) }
+
+                doc.name?.takeIf { it.isNotBlank() && it != deviceName }?.let {
+                    deviceName = it
+                    prefs.edit().putString("device_name", it).apply()
+                }
+
+                if (typeChanged) {
+                    // Keep the layout of the family we are leaving; the reload effect keyed on
+                    // controllerType will pull the merged one back in.
+                    layoutStore.save(configs, currentProfileName, controllerType)
+                    controllerType = newType
+                    layoutStore.setControllerType(newType)
+                    // The device type is announced in HELLO, so the session has to be redialled.
+                    networkController.disconnect()
+                    if (target != null) networkController.connect(target, newType, deviceName)
+                }
+
+                globalToastMessage = "Layout updated from PC"
+                configRevision++
+            }
+
+            DisposableEffect(Unit) {
+                networkController.onSetConfig = { json ->
+                    val doc = ConfigCodec.parse(json)
+                    if (doc == null) {
+                        android.util.Log.w("Nexus", "SET_CONFIG ignored: malformed or unsupported schema version")
+                    } else {
+                        applyPushedConfig(doc)
+                    }
+                }
+                onDispose { networkController.onSetConfig = null }
+            }
+
             fun applyTarget(newTarget: ConnectionTarget) {
                 saveTarget(newTarget)
                 target = newTarget
@@ -194,7 +307,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 themeMode = themeMode,
                 gyroRoll = gyroRoll,
                 gyroPitch = gyroPitch,
-                onSave = { layoutStore.save(configs, currentProfileName, controllerType) },
+                onSave = {
+                    layoutStore.save(configs, currentProfileName, controllerType)
+                    configRevision++
+                },
                 onOpenConnection = { showConnectionDialog = true },
                 onCloseConnection = { showConnectionDialog = false },
                 onInputChanged = { bl, bh, lx, ly, rx, ry, lt, rt ->
@@ -211,7 +327,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 onSendText = { text -> networkController.sendText(text) },
                 triggerReset = triggerReset,
                 onResetDone = { triggerReset = false },
-                onVibrate = { haptics.tap(touchVibration, hapticStrength) }
+                onVibrate = { haptics.tap(touchVibration, hapticStrength) },
+                onSurfaceMeasured = { w, h ->
+                    val measured = ScreenSize(w.roundToInt(), h.roundToInt())
+                    if (measured != screenSize) {
+                        screenSize = measured
+                        layoutStore.screen = measured
+                    }
+                }
             )
 
             if (showMenu) {
@@ -268,7 +391,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
             SettingsScreen(
                 isVisible = showSettings,
-                onBack = { showSettings = false; layoutStore.save(configs, currentProfileName, controllerType) },
+                onBack = {
+                    showSettings = false
+                    layoutStore.save(configs, currentProfileName, controllerType)
+                    configRevision++
+                },
                 state = SettingsState(
                     themeMode = themeMode,
                     keepScreenOn = keepScreenOn,
@@ -461,6 +588,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                                 layoutStore.save(edited, currentProfileName, controllerType)
                                 configs.clear()
                                 configs.putAll(edited)
+                                configRevision++
                                 showLayoutEditor = false
                             }
                         },
@@ -479,6 +607,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         layoutStore.save(tempConfigsForSave, name, controllerType)
                         currentProfileName = name
                         profileList = layoutStore.profileList()
+                        configRevision++
                         showNameDialog = false
                         showLayoutEditor = false
                         isCreatingNew = false
@@ -503,6 +632,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     /** Lightbar colour last requested by the PC — DS4 lightbar or Buzz lamp. */
     private var ledColor by mutableStateOf<Color?>(null)
+
+    /** Display size in pixels, used before the play surface has been measured. */
+    private fun displayScreenSize(): ScreenSize {
+        val dm = resources.displayMetrics
+        return ScreenSize(dm.widthPixels.coerceAtLeast(1), dm.heightPixels.coerceAtLeast(1))
+    }
 
     // ---------------------------------------------------------------- targets
 
@@ -582,4 +717,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+    private companion object {
+        /** Dragging a component fires a change per frame; the PC only needs the result. */
+        const val CONFIG_DEBOUNCE_MS = 500L
+    }
 }
