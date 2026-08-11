@@ -11,6 +11,8 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -181,20 +183,26 @@ fun EditableComponent(
     Box(
         modifier = Modifier
             .offset { IntOffset(config.x.roundToInt(), config.y.roundToInt()) }
-            // Gestures sit OUTSIDE the rotate/scale layers, so `pan` is already in parent
-            // pixels and dragging tracks the finger at any scale or rotation.
+            .rotate(config.rotation)
+            .scale(config.scale)
+            // The gesture nodes sit inside both graphics layers, so `pan` arrives in the
+            // component's own (scaled, rotated) space. `offset` above is in parent pixels,
+            // so map local -> parent with the same transform: rotate(scale(pan)).
             .pointerInput(isEditMode) { if (isEditMode) detectTapGestures { onSelect(id) } }
             .pointerInput(isEditMode) {
                 if (isEditMode) {
                     detectTransformGestures { _, pan, _, _ ->
                         if (!isSelected) onSelect(id)
-                        config.x += pan.x
-                        config.y += pan.y
+                        val sx = pan.x * config.scale
+                        val sy = pan.y * config.scale
+                        val rad = Math.toRadians(config.rotation.toDouble())
+                        val c = cos(rad).toFloat()
+                        val s = sin(rad).toFloat()
+                        config.x += sx * c - sy * s
+                        config.y += sx * s + sy * c
                     }
                 }
             }
-            .rotate(config.rotation)
-            .scale(config.scale)
             .then(
                 if (isEditMode && isSelected) {
                     Modifier
@@ -763,7 +771,7 @@ fun GlobalToast(
                     modifier = Modifier.widthIn(max = 400.dp)
                 ) {
                     Icon(
-                        androidx.compose.material.icons.Icons.Rounded.Info,
+                        Icons.Rounded.Info,
                         null,
                         tint = Color.White,
                         modifier = Modifier.size(22.dp)

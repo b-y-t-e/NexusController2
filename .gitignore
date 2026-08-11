@@ -20,6 +20,8 @@ android/.kotlin/
 *.aab
 *.jks
 *.keystore
+# The Gradle wrapper jar must be committed — without it gradlew cannot bootstrap.
+!gradle/wrapper/gradle-wrapper.jar
 
 # --- IDE / OS ---
 .idea/

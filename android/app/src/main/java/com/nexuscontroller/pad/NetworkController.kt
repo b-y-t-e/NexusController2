@@ -77,6 +77,9 @@ class NetworkController {
 
         val isCurrent: Boolean get() = generation.get() == id
 
+        /** Teardown must be idempotent: reader and writer can both fail on the same socket. */
+        val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+
         fun close() {
             try {
                 socket?.close()
@@ -302,6 +305,7 @@ class NetworkController {
      * connect that has already succeeded.
      */
     private fun finish(conn: Connection, errorMessage: String?) {
+        if (!conn.finished.compareAndSet(false, true)) return
         val owned = conn.isCurrent
         if (owned) {
             current = null
