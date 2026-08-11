@@ -294,14 +294,18 @@ same schema, so a document captured from one phone can be pushed to another.
 
 ### Component IDs and nominal sizes
 
-Nominal size is expressed as a fraction of screen **height** at `s = 1.0`, and is
-what the PC preview and the phone both use to draw a component.
+Nominal size is expressed as a fraction of screen **height** at `s = 1.0`. It is
+what the PC preview draws and what the coordinate migration uses. Component
+*centres* agree exactly between the phone and the PC; drawn sizes agree only
+approximately, because the phone renders each widget at its intrinsic size. When
+the two disagree, **the table follows the phone** — shrinking a widget to match a
+number would make it unusable.
 
 | Controller type | ID | Nominal size | Meaning |
 | --- | --- | --- | --- |
 | gamepad | `L_STICK`, `R_STICK` | 0.34 | analog sticks |
-| gamepad | `DPAD` | 0.30 | d-pad cluster |
-| gamepad | `FACE` | 0.30 | four face buttons |
+| gamepad | `DPAD` | 0.42 | d-pad cluster |
+| gamepad | `FACE` | 0.42 | four face buttons |
 | gamepad | `L1`, `R1` | 0.13 | shoulder buttons |
 | gamepad | `L2`, `R2` | 0.15 | analog triggers |
 | gamepad | `SHARE`, `OPTIONS` | 0.09 | Back/Start, Share/Options |

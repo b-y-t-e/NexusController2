@@ -97,8 +97,8 @@ and the pywebview UI thread polling `get_state()`.
 ## Roadmap
 
 **Done** — protocol v2 with token pairing; Xbox/DS4/Buzz emulation; 4 players;
-rumble; offline dashboard; key bindings; XInput capacity detection; 431 server
-tests + 52 Kotlin tests + hardware smoke test.
+rumble; offline dashboard; key bindings; XInput capacity detection; 442 server
+tests + 113 Kotlin tests + hardware smoke test.
 
 **Done, continued** — central configuration (`PROTOCOL.md` §10): live pad preview
 on every player card, drag-and-drop designer, controller-type switch from the PC,

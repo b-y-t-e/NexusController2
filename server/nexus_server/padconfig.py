@@ -41,11 +41,11 @@ class Component:
 GAMEPAD_COMPONENTS: Final[tuple[Component, ...]] = (
     Component("L2", "L2", 0.15, "pad"),
     Component("L1", "L1", 0.13, "pad"),
-    Component("DPAD", "D-pad", 0.30, "pad"),
+    Component("DPAD", "D-pad", 0.42, "pad"),
     Component("L_STICK", "Left stick", 0.34),
     Component("R2", "R2", 0.15, "pad"),
     Component("R1", "R1", 0.13, "pad"),
-    Component("FACE", "Face buttons", 0.30, "pad"),
+    Component("FACE", "Face buttons", 0.42, "pad"),
     Component("R_STICK", "Right stick", 0.34),
     Component("SHARE", "Back / Share", 0.09),
     Component("OPTIONS", "Start / Options", 0.09),
@@ -71,18 +71,20 @@ def component_ids(device_type: DeviceType) -> set[str]:
 
 
 #: Sensible starting positions, landscape, centre-referenced fractions.
+#: Kept identical to the Android client's defaults, so the preview shown for a
+#: slot that has not reported yet matches what a phone would actually display.
 DEFAULT_GAMEPAD_LAYOUT: Final[dict[str, dict[str, float]]] = {
-    "L2":      {"x": 0.08, "y": 0.15},
-    "L1":      {"x": 0.08, "y": 0.32},
-    "R2":      {"x": 0.92, "y": 0.15},
-    "R1":      {"x": 0.92, "y": 0.32},
-    "DPAD":    {"x": 0.15, "y": 0.62},
-    "L_STICK": {"x": 0.34, "y": 0.76},
-    "FACE":    {"x": 0.85, "y": 0.62},
-    "R_STICK": {"x": 0.66, "y": 0.76},
-    "SHARE":   {"x": 0.42, "y": 0.14},
-    "OPTIONS": {"x": 0.58, "y": 0.14},
-    "PS":      {"x": 0.50, "y": 0.30},
+    "L_STICK": {"x": 0.15, "y": 0.70, "s": 1.2},
+    "R_STICK": {"x": 0.85, "y": 0.70, "s": 1.2},
+    "DPAD":    {"x": 0.36, "y": 0.68},
+    "FACE":    {"x": 0.64, "y": 0.68},
+    "L1":      {"x": 0.10, "y": 0.17, "s": 0.9},
+    "R1":      {"x": 0.90, "y": 0.17, "s": 0.9},
+    "L2":      {"x": 0.10, "y": 0.34, "s": 0.9},
+    "R2":      {"x": 0.90, "y": 0.34, "s": 0.9},
+    "SHARE":   {"x": 0.42, "y": 0.30, "s": 0.9},
+    "OPTIONS": {"x": 0.58, "y": 0.30, "s": 0.9},
+    "PS":      {"x": 0.50, "y": 0.42},
 }
 
 DEFAULT_BUZZ_LAYOUT: Final[dict[str, dict[str, float]]] = {

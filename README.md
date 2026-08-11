@@ -159,15 +159,15 @@ Even so: treat it like any LAN service. Do not run it on a network you do not tr
 
 ```bat
 .venv\Scripts\python -m pip install -r requirements-dev.txt
-.venv\Scripts\python -m pytest                    REM 431 tests, no hardware needed
+.venv\Scripts\python -m pytest                    REM 442 tests, no hardware needed
 .venv\Scripts\python tools\smoke_test.py          REM real ViGEmBus + XInput round-trip
-cd android && gradlew.bat testDebugUnitTest   REM 52 Kotlin tests
+cd android && gradlew.bat testDebugUnitTest   REM 113 Kotlin tests
 ```
 
 `tests/test_client_compat.py` decodes the exact byte vectors asserted by the Kotlin
 suite, so the two implementations cannot drift apart without a test going red.
 
-The pytest suite (431 tests) runs against a fake pad backend, so it needs neither ViGEmBus nor a
+The pytest suite (442 tests) runs against a fake pad backend, so it needs neither ViGEmBus nor a
 phone. `tools/smoke_test.py` is the one that touches real hardware: it creates an actual
 virtual pad and reads it back through the Windows XInput API.
 

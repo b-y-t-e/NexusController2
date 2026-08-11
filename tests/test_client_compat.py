@@ -263,3 +263,116 @@ class TestServerAcceptsClientVectors:
             wait_for(lambda: pad.state.buttons_low == expected_low)
         finally:
             sock.close()
+
+
+# --- configuration documents (§10) ------------------------------------------
+
+#: Verbatim output of the Android client's `ConfigCodec.encode` for a freshly
+#: defaulted Xbox pad on a 2400×1080 screen. Copied from the Kotlin side; do not
+#: regenerate it from Python, or this stops proving anything.
+ANDROID_DEFAULT_XBOX = """
+{
+  "v": 1,
+  "type": "XBOX360",
+  "name": "Player 1",
+  "screen": { "w": 2400, "h": 1080 },
+  "layout": {
+    "L_STICK": { "x": 0.15, "y": 0.7,  "s": 1.2, "r": 0.0 },
+    "R_STICK": { "x": 0.85, "y": 0.7,  "s": 1.2, "r": 0.0 },
+    "DPAD":    { "x": 0.36, "y": 0.68, "s": 1.0, "r": 0.0 },
+    "FACE":    { "x": 0.64, "y": 0.68, "s": 1.0, "r": 0.0 },
+    "L1":      { "x": 0.1,  "y": 0.17, "s": 0.9, "r": 0.0 },
+    "R1":      { "x": 0.9,  "y": 0.17, "s": 0.9, "r": 0.0 },
+    "L2":      { "x": 0.1,  "y": 0.34, "s": 0.9, "r": 0.0 },
+    "R2":      { "x": 0.9,  "y": 0.34, "s": 0.9, "r": 0.0 },
+    "SHARE":   { "x": 0.42, "y": 0.3,  "s": 0.9, "r": 0.0 },
+    "OPTIONS": { "x": 0.58, "y": 0.3,  "s": 0.9, "r": 0.0 },
+    "PS":      { "x": 0.5,  "y": 0.42, "s": 1.0, "r": 0.0 }
+  },
+  "settings": {
+    "haptics": true, "hapticStrength": 0.85, "gyro": false,
+    "gyroSensitivity": 0.4, "touchVibration": true, "theme": "Dark"
+  }
+}
+"""
+
+#: Kotlin: `Protocol.configJson("{\"v\":1}")`.
+CONFIG_TINY = bytes([0x06, 0x00, 0x07]) + b'{"v":1}'
+
+
+class TestAndroidConfigDocument:
+    def test_the_client_document_parses(self):
+        from nexus_server.padconfig import PadConfig
+
+        config = PadConfig.from_json(ANDROID_DEFAULT_XBOX)
+        assert config.device_type is DeviceType.XBOX360
+        assert config.name == "Player 1"
+        assert config.screen == (2400, 1080)
+
+    def test_every_component_survives(self):
+        from nexus_server.padconfig import PadConfig, component_ids
+
+        config = PadConfig.from_json(ANDROID_DEFAULT_XBOX)
+        assert set(config.layout) == component_ids(DeviceType.XBOX360)
+
+    def test_placements_are_read_exactly(self):
+        from nexus_server.padconfig import PadConfig
+
+        layout = PadConfig.from_json(ANDROID_DEFAULT_XBOX).layout
+        assert layout["L_STICK"] == {"x": 0.15, "y": 0.7, "s": 1.2, "r": 0.0}
+        assert layout["PS"]["y"] == 0.42
+
+    def test_integer_valued_floats_are_accepted(self):
+        """Kotlin writes `0.0` where a strict reader might expect `0`."""
+        from nexus_server.padconfig import PadConfig
+
+        assert PadConfig.from_json(ANDROID_DEFAULT_XBOX).layout["DPAD"]["r"] == 0.0
+
+    def test_settings_are_read(self):
+        from nexus_server.padconfig import PadConfig
+
+        settings = PadConfig.from_json(ANDROID_DEFAULT_XBOX).settings
+        assert settings["haptics"] is True
+        assert settings["hapticStrength"] == 0.85
+        assert settings["theme"] == "Dark"
+
+    def test_the_pc_default_matches_the_client_default(self):
+        """A slot that has not reported yet must preview what a phone would show."""
+        from nexus_server.padconfig import PadConfig
+
+        client = PadConfig.from_json(ANDROID_DEFAULT_XBOX)
+        ours = PadConfig.default(DeviceType.XBOX360)
+        assert ours.layout == client.layout
+
+    def test_the_document_round_trips_through_the_server(self):
+        from nexus_server.padconfig import PadConfig
+
+        original = PadConfig.from_json(ANDROID_DEFAULT_XBOX)
+        assert PadConfig.from_json(original.encode_body()).layout == original.layout
+
+    def test_body_is_comfortably_within_the_limit(self):
+        from nexus_server.padconfig import MAX_CONFIG_BYTES, PadConfig
+
+        assert len(PadConfig.from_json(ANDROID_DEFAULT_XBOX).encode_body()) < MAX_CONFIG_BYTES
+
+
+class TestConfigFramingAgreement:
+    def test_tiny_document_framing(self):
+        import struct
+
+        assert CONFIG_TINY[0] == P.ClientOpcode.CONFIG
+        assert struct.unpack(">H", CONFIG_TINY[1:3])[0] == len(CONFIG_TINY) - 3
+        assert CONFIG_TINY[3:] == b'{"v":1}'
+
+    def test_server_framing_mirrors_the_client(self):
+        """Both directions use `opcode | uint16 length | UTF-8 body`."""
+        framed = P.encode_set_config(b'{"v":1}')
+        assert framed[0] == P.ServerOpcode.SET_CONFIG
+        assert framed[1:] == CONFIG_TINY[1:]
+
+    def test_length_counts_bytes_not_characters(self):
+        import struct
+
+        body = '{"n":"ąę"}'.encode("utf-8")
+        framed = P.encode_set_config(body)
+        assert struct.unpack(">H", framed[1:3])[0] == len(body) > len('{"n":"ąę"}')
