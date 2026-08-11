@@ -9,7 +9,8 @@ controller for Windows, over Wi-Fi or USB.
 
 ## What it does
 
-* **Three controller types**, switchable from the phone without restarting anything:
+* **Three controller types**, switchable from the phone *or* from the PC, without
+  restarting anything:
   * **Xbox 360** — a real XInput pad, works with everything on Windows.
   * **DualShock 4** — for games that prefer a PlayStation pad (correct 8-way hat and lightbar).
   * **Buzz! (PS3)** — a big red buzzer plus four coloured answer buttons, mapped exactly the
@@ -28,8 +29,9 @@ controller for Windows, over Wi-Fi or USB.
 
 | | |
 | --- | --- |
-| PC | Windows 10/11, Python 3.10+ |
-| Driver | [ViGEmBus](https://github.com/nefarius/ViGEmBus/releases/latest) |
+| PC | Windows 10 or 11 |
+| Python | only when running from source — 3.10 or newer. The released `.exe` needs none |
+| Driver | [ViGEmBus](https://github.com/nefarius/ViGEmBus/releases/latest), bundled inside the released `.exe` |
 | Phone | Android 9 (API 28) or newer |
 | Network | Both devices on the same Wi-Fi, or a USB cable |
 
@@ -71,7 +73,10 @@ run `tools\add_firewall_rule.bat` once as Administrator and start the server nor
 
 ## Install (Android)
 
-Open `android/` in Android Studio, let Gradle sync, and run. Or build from the command line:
+Download `NexusController.apk` from the [latest release](../../releases/latest) and
+install it — Android will ask you to allow installs from this source.
+
+To build it yourself, open `android/` in Android Studio, or from the command line:
 
 ```bat
 cd android
@@ -182,13 +187,18 @@ server/nexus_server/
   server.py     TCP server, handshake, discovery
   session.py    player slots, rate limiting
   desktop.py    gated mouse/keyboard, pad-button → key bindings
+  xinput.py     XInput slot accounting (see "How many controllers?")
+  netinfo.py    local address discovery
+  system.py     firewall rules and adb reverse
   config.py     settings in %APPDATA%\NexusController
   app.py        dashboard and CLI
   web/          dashboard assets (no CDN, no network)
-tools/build_exe.py  builds the single-file .exe, bundling ViGEmBus
-android/        Jetpack Compose client
-docs/PROTOCOL.md  the contract between the two
-tests/          pytest suite
+tools/build_exe.py       builds the single-file .exe, bundling ViGEmBus
+tools/smoke_test.py      real ViGEmBus + XInput round-trip
+android/                 Jetpack Compose client
+docs/PROTOCOL.md         the contract between the two
+tests/                   pytest suite
+.github/workflows/       tagged builds, published to Releases
 ```
 
 Settings live in `%APPDATA%\NexusController\settings.json`, never inside the install
@@ -198,8 +208,9 @@ directory, so the app keeps working from `Program Files`.
 
 | Symptom | Fix |
 | --- | --- |
-| `SIMULATION` badge in the dashboard | ViGEmBus is not installed. Install it and reboot. |
+| `SIMULATION` badge in the dashboard | ViGEmBus is not installed. Click **Install driver** in the yellow banner (the released `.exe` bundles the installer), then reboot. Running from source? Install it from the link above. |
 | Phone cannot see the server | Run `tools\add_firewall_rule.bat` as Administrator. Check both devices are on the same network and that the router does not use AP isolation. |
+| Layout pushed from the PC did not arrive | The phone must be connected — the dashboard reports "Player not connected". Check the player card shows a live thumbnail. |
 | "Invalid pairing token" | The token rotated when the server restarted. Scan the QR code again, or tick *Keep the same token between restarts*. |
 | Buzz buttons do nothing in RPCS3 | Set **Emulated Buzz devices** to *1 controller* in RPCS3's I/O settings. |
 | Input lag | Prefer 5 GHz Wi-Fi, or use USB mode. |
