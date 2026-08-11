@@ -48,7 +48,8 @@ class LayoutMigrationTest {
         val migrated = LayoutMigration.normalise(
             mapOf(
                 "L_STICK" to LayoutEntry(0f, 0f),   // nominal 0.34 -> half 183.6 px
-                "SHARE" to LayoutEntry(0f, 0f)      // nominal 0.09 -> half  48.6 px
+                "SHARE" to LayoutEntry(0f, 0f),     // nominal 0.09 -> half  48.6 px
+                "FACE" to LayoutEntry(1320f, 648f)  // marks the document as legacy pixels
             ),
             screen
         )
@@ -80,7 +81,10 @@ class LayoutMigrationTest {
 
     @Test
     fun `an unknown component falls back to the default nominal size`() {
-        val migrated = LayoutMigration.normalise(mapOf("BTN_1" to LayoutEntry(0f, 0f)), screen)
+        val migrated = LayoutMigration.normalise(
+            mapOf("BTN_1" to LayoutEntry(0f, 0f), "FACE" to LayoutEntry(1320f, 648f)),
+            screen
+        )
         val half = ComponentSizes.DEFAULT_NOMINAL * 1080f / 2f
         assertEquals(half / 2400f, migrated.getValue("BTN_1").x, 0.0001f)
     }

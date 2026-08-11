@@ -35,3 +35,6 @@ Desktop.ini
 settings.json
 *.log
 Output/
+
+# PyInstaller writes this from the flags in tools/build_exe.py
+*.spec
