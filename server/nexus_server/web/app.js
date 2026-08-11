@@ -177,6 +177,10 @@ function applyState(state) {
   $('pair-target').textContent = running ? state.ip + ':' + state.port : '—';
   $('token').textContent = state.token || 'no token required';
 
+  const banner = $('xinput-banner');
+  banner.textContent = state.xinput_warning || '';
+  banner.classList.toggle('hidden', !state.xinput_warning);
+
   $('slot-count').textContent = state.connected + ' / ' + state.capacity;
   $('pps').textContent = state.pps + ' pkt/s';
   history.push(state.pps);

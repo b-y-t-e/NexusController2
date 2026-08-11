@@ -100,6 +100,19 @@ In RPCS3 set **Settings → I/O → Emulated Buzz devices → 1 controller**, th
 phone per player. No extra driver is required. The real dongle's HID report format is
 implemented in `server/nexus_server/buzz.py` and covered by tests, for reference.
 
+## How many controllers?
+
+Four players connect to the server at once, but **Windows itself exposes only four
+XInput slots for the whole machine**, and physical controllers share them. So:
+
+* 4 phones in Xbox/Buzz mode → 4 XInput pads, verified as four independent devices.
+* 1 physical Xbox pad plugged in → only **3** phones will be visible to games.
+* A fifth XInput device is created without any error by the driver but is invisible to
+  every game. The server detects this and shows a warning in the dashboard instead of
+  letting you hunt a phantom bug.
+* **DualShock 4 mode does not use an XInput slot** — it is a HID device. If you run out
+  of XInput slots, switch a phone to DS4 mode.
+
 ## Security
 
 This server accepts input that moves your mouse and presses buttons, so it is built to
@@ -120,7 +133,7 @@ Even so: treat it like any LAN service. Do not run it on a network you do not tr
 
 ```bat
 .venv\Scripts\python -m pip install -r requirements-dev.txt
-.venv\Scripts\python -m pytest                    REM 307 tests, no hardware needed
+.venv\Scripts\python -m pytest                    REM 321 tests, no hardware needed
 .venv\Scripts\python tools\smoke_test.py          REM real ViGEmBus + XInput round-trip
 cd android && gradlew.bat testDebugUnitTest   REM 52 Kotlin tests
 ```
@@ -128,7 +141,7 @@ cd android && gradlew.bat testDebugUnitTest   REM 52 Kotlin tests
 `tests/test_client_compat.py` decodes the exact byte vectors asserted by the Kotlin
 suite, so the two implementations cannot drift apart without a test going red.
 
-The pytest suite (307 tests) runs against a fake pad backend, so it needs neither ViGEmBus nor a
+The pytest suite (321 tests) runs against a fake pad backend, so it needs neither ViGEmBus nor a
 phone. `tools/smoke_test.py` is the one that touches real hardware: it creates an actual
 virtual pad and reads it back through the Windows XInput API.
 

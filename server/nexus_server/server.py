@@ -25,6 +25,7 @@ from .protocol import (
     RejectReason,
     ScrollDelta,
 )
+from . import xinput
 from .session import AttemptTracker, PlayerSession, RateLimiter, SlotAllocator, Visuals
 from .system import FirewallManager, remove_adb_reverse, setup_adb_reverse
 
@@ -72,6 +73,7 @@ class ControllerServer:
         self.bind_ip = ""
         self.total_packets = 0
         self.last_error: str | None = None
+        self.xinput_warning: str | None = None
         self.status_messages: list[str] = []
 
     # -- lifecycle ----------------------------------------------------------
@@ -95,6 +97,7 @@ class ControllerServer:
                 return
             self.status_messages = []
             self.last_error = None
+            self.xinput_warning = None
             bind_ip = self.settings.bind_ip or primary_ip()
 
             listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -263,6 +266,7 @@ class ControllerServer:
                 return
 
             self._attempts.clear(address[0])
+            self._warn_if_no_xinput_slot(hello.device_type)
             try:
                 pad = self.backend.create(
                     hello.device_type,
@@ -299,6 +303,24 @@ class ControllerServer:
             self.slots.release(session)
             if was_connected:
                 self._log(f"{name} disconnected")
+
+    def _warn_if_no_xinput_slot(self, device_type: DeviceType) -> None:
+        """Say so loudly when a pad is about to be created that games cannot see.
+
+        ViGEm reports success for a fifth XInput device, so without this check the
+        failure is completely silent: the phone says "connected" and nothing works.
+        """
+        if device_type is DeviceType.DUALSHOCK4:
+            return  # a DS4 is a HID device and does not consume an XInput slot
+        pending = 1 + sum(
+            1
+            for session in self.slots.sessions
+            if session.connected and session.device_type is not DeviceType.DUALSHOCK4
+        )
+        warning = xinput.capacity_warning(xinput.free_slot_count(), pending)
+        if warning is not None:
+            self.xinput_warning = warning
+            self._log(f"WARNING: {warning}")
 
     def _validate(self, hello: Hello) -> RejectReason | None:
         if hello.version != P.PROTOCOL_VERSION:
@@ -467,6 +489,8 @@ class ControllerServer:
             "haptics": self.settings.haptics,
             "messages": list(self.status_messages),
             "error": self.last_error,
+            "xinput_warning": self.xinput_warning,
+            "xinput_free": xinput.free_slot_count(),
         }
 
 

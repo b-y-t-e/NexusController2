@@ -29,6 +29,9 @@ html, body {
   font-size: 14px;
   overflow: hidden;
 }
+/* Column flow so the capacity banner can appear without pushing the grid
+   off-screen — the layout takes whatever height is left. */
+body { display: flex; flex-direction: column; }
 
 body::before {
   content: "";
@@ -48,6 +51,7 @@ body::before {
 /* --- top bar --- */
 .topbar {
   height: 54px;
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -100,7 +104,8 @@ body::before {
   grid-template-columns: 300px 1fr;
   gap: 14px;
   padding: 14px;
-  height: calc(100% - 54px);
+  flex: 1;
+  min-height: 0;
   position: relative;
   z-index: 1;
 }
@@ -317,3 +322,18 @@ body.running .status-text { color: var(--accent); text-shadow: 0 0 18px var(--ac
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* --- capacity banner --- */
+.banner {
+  flex: none;
+  margin: 12px 14px -2px;
+  padding: 9px 13px;
+  border: 1px solid rgba(251,191,36,.4);
+  background: rgba(251,191,36,.1);
+  color: #fbbf24;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  position: relative;
+  z-index: 1;
+}
