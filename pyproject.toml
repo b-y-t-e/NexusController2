@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nexus-controller-server"
+version = "2.0.0"
+description = "Turn an Android phone into a virtual Xbox 360 / DualShock 4 / Buzz controller for Windows"
+requires-python = ">=3.10"
+dependencies = [
+    "vgamepad>=0.1.0",
+    "pywebview>=5.0",
+    "qrcode[pil]>=7.4",
+    "pynput>=1.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-timeout>=2.2"]
+
+[project.scripts]
+nexus-controller = "nexus_server.app:main"
+
+[tool.setuptools]
+package-dir = { "" = "server" }
+
+[tool.setuptools.packages.find]
+where = ["server"]
+
+[tool.setuptools.package-data]
+nexus_server = ["web/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["server"]
+addopts = "-q --timeout=30"
+filterwarnings = ["error::DeprecationWarning:nexus_server.*"]

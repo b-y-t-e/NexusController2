@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nexus Controller</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-theme="cyan">
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark"></span>
+    <h1>NEXUS <span>CONTROLLER</span></h1>
+    <span class="version" id="version"></span>
+    <span class="badge badge-warn hidden" id="sim-badge" title="ViGEmBus not available — no real controller is created">SIMULATION</span>
+  </div>
+  <div class="topbar-right">
+    <div class="themes" role="group" aria-label="Theme">
+      <button class="dot" data-theme-name="cyan" style="--dot:#22d3ee" title="Cyan"></button>
+      <button class="dot" data-theme-name="green" style="--dot:#4ade80" title="Green"></button>
+      <button class="dot" data-theme-name="amber" style="--dot:#fbbf24" title="Amber"></button>
+      <button class="dot" data-theme-name="rose" style="--dot:#fb7185" title="Rose"></button>
+    </div>
+  </div>
+</header>
+
+<main class="layout">
+
+  <section class="col-left">
+    <div class="card power">
+      <div class="status-ring" id="status-ring">
+        <div class="status-text" id="status-text">OFF</div>
+        <div class="status-sub" id="status-sub">not listening</div>
+      </div>
+      <label class="field">
+        <span>Network interface</span>
+        <select id="ip-select"></select>
+      </label>
+      <button class="btn btn-primary" id="power-btn">START SERVER</button>
+      <p class="error hidden" id="start-error"></p>
+    </div>
+
+    <div class="card pair">
+      <h2>Pairing</h2>
+      <div class="qr-frame">
+        <img id="qr" alt="Pairing QR code" class="hidden">
+        <p class="qr-placeholder" id="qr-placeholder">Start the server to show the pairing code</p>
+      </div>
+      <p class="pair-target" id="pair-target">—</p>
+      <div class="token-row">
+        <code id="token">—</code>
+        <button class="btn btn-ghost btn-sm" id="regen-token" title="Generate a new token; connected phones must scan again">New</button>
+      </div>
+      <label class="check">
+        <input type="checkbox" id="pin-token">
+        <span>Keep the same token between restarts</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="require-token" checked>
+        <span>Require pairing token</span>
+      </label>
+    </div>
+  </section>
+
+  <section class="col-right">
+    <div class="card players">
+      <div class="card-head">
+        <h2>Players</h2>
+        <span class="pill" id="slot-count">0 / 4</span>
+      </div>
+      <div id="player-list" class="player-list"></div>
+    </div>
+
+    <div class="row-2">
+      <div class="card graph">
+        <div class="card-head">
+          <h2>Input stream</h2>
+          <span class="pill" id="pps">0 pkt/s</span>
+        </div>
+        <canvas id="chart" height="90"></canvas>
+      </div>
+
+      <div class="card security">
+        <div class="card-head"><h2>Desktop control</h2></div>
+        <p class="muted small">Lets the selected player move the mouse and type on this PC. Off by default.</p>
+        <label class="switch">
+          <input type="checkbox" id="desktop-toggle">
+          <span>Allow mouse &amp; keyboard</span>
+        </label>
+        <label class="field">
+          <span>Controlled by</span>
+          <select id="desktop-slot">
+            <option value="0">Player 1</option>
+            <option value="1">Player 2</option>
+            <option value="2">Player 3</option>
+            <option value="3">Player 4</option>
+          </select>
+        </label>
+        <p class="warn hidden" id="desktop-warning">Anyone holding the pairing token can control this PC while this is on.</p>
+        <label class="switch">
+          <input type="checkbox" id="haptics-toggle" checked>
+          <span>Send rumble to phones</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="card log">
+      <div class="card-head"><h2>Log</h2></div>
+      <div id="log" class="log-body"></div>
+    </div>
+  </section>
+</main>
+
+<div class="modal hidden" id="modal">
+  <div class="modal-card">
+    <button class="modal-close" id="modal-close" aria-label="Close">&times;</button>
+    <h2 id="modal-title">Player 1</h2>
+    <p class="muted small">Bind a pad button to a keyboard key. Bound buttons stop reaching the game
+      and are sent as keystrokes instead — this needs desktop control to be enabled.</p>
+    <div class="bind-grid" id="bind-grid"></div>
+    <p class="bind-status" id="bind-status">&nbsp;</p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="clear-binds">Clear all</button>
+      <button class="btn btn-ghost" id="test-rumble">Test rumble</button>
+      <button class="btn btn-primary" id="modal-done">Done</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

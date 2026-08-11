@@ -1,0 +1,35 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# --- Android / Gradle ---
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/.kotlin/
+*.iml
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# --- IDE / OS ---
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# --- Runtime artefacts ---
+# Settings live in %APPDATA%\NexusController, never in the repo.
+settings.json
+*.log
+Output/

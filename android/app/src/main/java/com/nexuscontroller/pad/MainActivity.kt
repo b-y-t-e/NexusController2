@@ -1,0 +1,585 @@
+package com.nexuscontroller.pad
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.os.Build
+import android.os.Bundle
+import android.view.WindowManager
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+
+class MainActivity : ComponentActivity(), SensorEventListener {
+
+    private val networkController = NetworkController()
+    private lateinit var prefs: SharedPreferences
+    private lateinit var profilesPrefs: SharedPreferences
+    private lateinit var layoutStore: LayoutStore
+
+    private lateinit var sensorManager: SensorManager
+    private var sensor: Sensor? = null
+
+    private var gyroRoll by mutableIntStateOf(0)
+    private var gyroPitch by mutableIntStateOf(0)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        prefs = getSharedPreferences("layout_prefs", MODE_PRIVATE)
+        profilesPrefs = getSharedPreferences("profiles_list", MODE_PRIVATE)
+        layoutStore = LayoutStore(prefs, profilesPrefs)
+
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+            val insetsController = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+            insetsController.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            insetsController.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        } else {
+            @Suppress("DEPRECATION")
+            window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        }
+
+        setContent {
+            val context = LocalContext.current
+            val haptics = remember { Haptics(context) }
+
+            var isConnected by remember { mutableStateOf(false) }
+            var showMenu by remember { mutableStateOf(false) }
+            var currentMode by remember { mutableIntStateOf(0) }   // 0=Controller, 1=Trackpad, 2=Racing
+            var showSettings by remember { mutableStateOf(false) }
+            var showHelp by remember { mutableStateOf(false) }
+            var showAbout by remember { mutableStateOf(false) }
+            var globalToastMessage by remember { mutableStateOf<String?>(null) }
+
+            // ---- settings ----
+            var themeMode by remember { mutableStateOf(prefs.getString("theme_mode", "Dark") ?: "Dark") }
+            var keepScreenOn by remember { mutableStateOf(prefs.getBoolean("keep_screen_on", true)) }
+            var hapticEnabled by remember { mutableStateOf(prefs.getBoolean("haptic_enabled", true)) }
+            var hapticStrength by remember { mutableFloatStateOf(prefs.getFloat("haptic_strength", 0.85f)) }
+            var gyroEnabled by remember { mutableStateOf(prefs.getBoolean("gyro_enabled", false)) }
+            var gyroSensitivity by remember { mutableFloatStateOf(prefs.getFloat("gyro_sensitivity", 0.4f)) }
+            var touchVibration by remember { mutableStateOf(prefs.getBoolean("touch_vibration", true)) }
+            var autoReconnect by remember { mutableStateOf(prefs.getBoolean("auto_reconnect", true)) }
+            var deviceName by remember { mutableStateOf(prefs.getString("device_name", "Player 1") ?: "Player 1") }
+            var touchSensitivity by remember { mutableFloatStateOf(prefs.getFloat("touch_sensitivity", 1.0f)) }
+            var controllerType by remember { mutableStateOf(layoutStore.controllerType()) }
+
+            // ---- connection ----
+            var target by remember { mutableStateOf(loadSavedTarget()) }
+            // A rejected pairing code must not be retried in a loop.
+            var handshakeBlocked by remember { mutableStateOf(false) }
+
+            LaunchedEffect(keepScreenOn) {
+                if (keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+
+            // Latest settings for the network callbacks, which are installed once.
+            val currentHapticEnabled by rememberUpdatedState(hapticEnabled)
+            val currentHapticStrength by rememberUpdatedState(hapticStrength)
+
+            DisposableEffect(Unit) {
+                networkController.onStateChanged = { state ->
+                    isConnected = state == NetworkController.State.CONNECTED
+                    if (isConnected) handshakeBlocked = false else haptics.cancel()
+                }
+                networkController.onRumble = { large, small ->
+                    val strength = maxOf(large, small)
+                    if (currentHapticEnabled) haptics.rumble(strength, currentHapticStrength)
+                    else haptics.cancel()
+                }
+                networkController.onLed = { r, g, b ->
+                    ledColor = if (r == 0 && g == 0 && b == 0) null else Color(r, g, b)
+                }
+                networkController.onWelcome = { welcome ->
+                    globalToastMessage = "Connected as player ${welcome.slot + 1}"
+                }
+                networkController.onRejected = { reason ->
+                    // Retrying a bad token or a rate limit only makes things worse.
+                    handshakeBlocked = reason == RejectReason.INVALID_TOKEN ||
+                        reason == RejectReason.RATE_LIMITED ||
+                        reason == RejectReason.UNSUPPORTED_VERSION
+                }
+                networkController.onError = { msg -> globalToastMessage = friendlyError(msg) }
+                onDispose {
+                    networkController.onStateChanged = null
+                    networkController.onRumble = null
+                    networkController.onLed = null
+                    networkController.onWelcome = null
+                    networkController.onRejected = null
+                    networkController.onError = null
+                }
+            }
+
+            // Auto-reconnect: only dials when idle, never while a connect is in flight.
+            LaunchedEffect(target, autoReconnect, controllerType, handshakeBlocked) {
+                while (true) {
+                    if (!isConnected && autoReconnect && !handshakeBlocked && target != null) {
+                        networkController.connectIfIdle(target, controllerType, deviceName)
+                    }
+                    kotlinx.coroutines.delay(3000)
+                }
+            }
+
+            val configs = remember { mutableStateMapOf<String, CompConfig>() }
+            var showLayoutManager by remember { mutableStateOf(false) }
+            var currentProfileName by remember { mutableStateOf(layoutStore.activeProfile()) }
+            var profileList by remember { mutableStateOf(layoutStore.profileList()) }
+
+            LaunchedEffect(currentProfileName, controllerType) {
+                layoutStore.load(configs, currentProfileName, controllerType)
+                layoutStore.setActiveProfile(currentProfileName)
+            }
+
+            var showConnectionDialog by remember { mutableStateOf(false) }
+            var triggerReset by remember { mutableStateOf(false) }
+
+            var gyroRollOffset by remember { mutableIntStateOf(0) }
+            var gyroPitchOffset by remember { mutableIntStateOf(0) }
+
+            var showLayoutEditor by remember { mutableStateOf(false) }
+            var isCreatingNew by remember { mutableStateOf(false) }
+            var showNameDialog by remember { mutableStateOf(false) }
+            val tempConfigsForSave = remember { mutableMapOf<String, CompConfig>() }
+
+            fun applyTarget(newTarget: ConnectionTarget) {
+                saveTarget(newTarget)
+                target = newTarget
+                handshakeBlocked = false
+                networkController.disconnect()
+                networkController.connect(newTarget, controllerType, deviceName)
+            }
+
+            fun switchControllerType(type: ControllerType) {
+                if (type == controllerType) return
+                layoutStore.save(configs, currentProfileName, controllerType)
+                controllerType = type
+                layoutStore.setControllerType(type)
+                // The device type is announced in HELLO, so the session has to be redialled.
+                networkController.disconnect()
+                if (target != null) networkController.connect(target, type, deviceName)
+                globalToastMessage = "Controller type: ${type.label}"
+            }
+
+            PSControllerScreen(
+                isConnected = isConnected,
+                showConnectionDialog = showConnectionDialog,
+                currentMode = currentMode,
+                controllerType = controllerType,
+                onToggleMenu = { showMenu = true },
+                configs = configs,
+                themeMode = themeMode,
+                gyroRoll = gyroRoll,
+                gyroPitch = gyroPitch,
+                onSave = { layoutStore.save(configs, currentProfileName, controllerType) },
+                onOpenConnection = { showConnectionDialog = true },
+                onCloseConnection = { showConnectionDialog = false },
+                onInputChanged = { bl, bh, lx, ly, rx, ry, lt, rt ->
+                    val gRoll = if (gyroEnabled) ((gyroRoll - gyroRollOffset) * gyroSensitivity).toInt() else 0
+                    val gPitch = if (gyroEnabled) ((gyroPitch - gyroPitchOffset) * gyroSensitivity).toInt() else 0
+                    networkController.sendInput(
+                        lx, ly, rx, ry, bl, bh, lt, rt, gRoll, gPitch,
+                        mouseMode = currentMode == 1,
+                        gyroValid = gyroEnabled
+                    )
+                },
+                onMouseMove = { dx, dy, l, r -> networkController.sendMouse(dx, dy, l, r, touchSensitivity) },
+                onScroll = { dx, dy -> networkController.sendScroll(dx, dy, touchSensitivity) },
+                onSendText = { text -> networkController.sendText(text) },
+                triggerReset = triggerReset,
+                onResetDone = { triggerReset = false },
+                onVibrate = { haptics.tap(touchVibration, hapticStrength) }
+            )
+
+            if (showMenu) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.4f))
+                        .blur(8.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { showMenu = false }
+                        .zIndex(15f)
+                )
+            }
+
+            StitchSidebar(
+                isVisible = showMenu,
+                currentMode = currentMode,
+                controllerType = controllerType,
+                onControllerTypeChange = { switchControllerType(it) },
+                onModeSelect = { mode ->
+                    currentMode = mode
+                    showMenu = false
+                    showSettings = false
+                    showHelp = false
+                    showAbout = false
+                },
+                onDisconnect = {
+                    networkController.disconnect()
+                    target = null
+                    showMenu = false
+                    showConnectionDialog = false
+                },
+                onDismiss = { showMenu = false },
+                onSettingsClick = { showMenu = false; showSettings = true },
+                onHelpClick = { showMenu = false; showHelp = true },
+                onAboutClick = { showMenu = false; showAbout = true },
+                onLayoutsClick = { showMenu = false; showLayoutManager = true },
+                themeMode = themeMode
+            )
+
+            if (showHelp) {
+                Box(modifier = Modifier.zIndex(100f).fillMaxSize()) {
+                    HelpScreen(onBack = { showHelp = false }, themeMode = themeMode)
+                }
+            }
+
+            if (showAbout) {
+                Box(modifier = Modifier.zIndex(100f).fillMaxSize()) {
+                    AboutScreen(onBack = { showAbout = false }, themeMode = themeMode)
+                }
+            }
+
+            SettingsScreen(
+                isVisible = showSettings,
+                onBack = { showSettings = false; layoutStore.save(configs, currentProfileName, controllerType) },
+                state = SettingsState(
+                    themeMode = themeMode,
+                    keepScreenOn = keepScreenOn,
+                    hapticEnabled = hapticEnabled,
+                    hapticStrength = hapticStrength,
+                    gyroEnabled = gyroEnabled,
+                    gyroSensitivity = gyroSensitivity,
+                    touchVibration = touchVibration,
+                    autoReconnect = autoReconnect,
+                    deviceName = deviceName,
+                    touchSensitivity = touchSensitivity,
+                    controllerType = controllerType
+                ),
+                onThemeChange = { mode ->
+                    themeMode = mode
+                    prefs.edit().putString("theme_mode", mode).apply()
+                },
+                onScreenOnToggle = {
+                    keepScreenOn = it
+                    prefs.edit().putBoolean("keep_screen_on", it).apply()
+                },
+                onHapticToggle = {
+                    hapticEnabled = it
+                    prefs.edit().putBoolean("haptic_enabled", it).apply()
+                },
+                onHapticStrengthChange = {
+                    hapticStrength = it
+                    prefs.edit().putFloat("haptic_strength", it).apply()
+                },
+                onGyroToggle = {
+                    gyroEnabled = it
+                    prefs.edit().putBoolean("gyro_enabled", it).apply()
+                },
+                onGyroSensitivityChange = {
+                    gyroSensitivity = it
+                    prefs.edit().putFloat("gyro_sensitivity", it).apply()
+                },
+                onCalibrateGyro = {
+                    gyroRollOffset = gyroRoll
+                    gyroPitchOffset = gyroPitch
+                    globalToastMessage = "Gyro Center Calibrated"
+                },
+                onTouchVibrationToggle = {
+                    touchVibration = it
+                    prefs.edit().putBoolean("touch_vibration", it).apply()
+                },
+                onAutoReconnectToggle = {
+                    autoReconnect = it
+                    prefs.edit().putBoolean("auto_reconnect", it).apply()
+                },
+                onDeviceNameChange = {
+                    deviceName = it
+                    prefs.edit().putString("device_name", it).apply()
+                },
+                onTouchSensitivityChange = {
+                    touchSensitivity = it
+                    prefs.edit().putFloat("touch_sensitivity", it).apply()
+                },
+                onControllerTypeChange = { switchControllerType(it) },
+                onSave = { showSettings = false },
+                onReset = {
+                    themeMode = "Dark"
+                    keepScreenOn = true
+                    hapticEnabled = true
+                    hapticStrength = 0.85f
+                    gyroEnabled = false
+                    gyroSensitivity = 0.4f
+                    touchVibration = true
+                    autoReconnect = true
+                    touchSensitivity = 1.0f
+                    gyroRollOffset = 0
+                    gyroPitchOffset = 0
+
+                    prefs.edit()
+                        .putString("theme_mode", "Dark")
+                        .putBoolean("keep_screen_on", true)
+                        .putBoolean("haptic_enabled", true)
+                        .putFloat("haptic_strength", 0.85f)
+                        .putBoolean("gyro_enabled", false)
+                        .putFloat("gyro_sensitivity", 0.4f)
+                        .putBoolean("touch_vibration", true)
+                        .putBoolean("auto_reconnect", true)
+                        .putFloat("touch_sensitivity", 1.0f)
+                        .apply()
+                }
+            )
+
+            if (showConnectionDialog) {
+                Box(Modifier.fillMaxSize().zIndex(100f)) {
+                    StitchConnectionScreen(
+                        currentIp = target?.ip ?: "",
+                        onDismiss = { showConnectionDialog = false },
+                        onConnect = { raw ->
+                            val parsed = resolveTarget(raw)
+                            if (parsed == null) {
+                                globalToastMessage =
+                                    "Invalid address. Use an IPv4 like 192.168.1.20 or scan the QR code."
+                            } else {
+                                applyTarget(parsed)
+                                showConnectionDialog = false
+                            }
+                        },
+                        onConnectDiscovered = { ip, port ->
+                            val parsed = resolveTarget(ip)?.copy(port = port)
+                            if (parsed == null) {
+                                globalToastMessage = "Invalid address reported by discovery."
+                            } else {
+                                applyTarget(parsed)
+                                showConnectionDialog = false
+                            }
+                        },
+                        onQrScan = {
+                            val options = GmsBarcodeScannerOptions.Builder()
+                                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                                .enableAutoZoom()
+                                .build()
+                            val scanner = GmsBarcodeScanning.getClient(this@MainActivity, options)
+                            scanner.startScan()
+                                .addOnSuccessListener { barcode ->
+                                    val parsed = QrPayload.parse(barcode.rawValue)
+                                    if (parsed == null) {
+                                        globalToastMessage =
+                                            "This QR code is not a Nexus Controller pairing code."
+                                    } else {
+                                        applyTarget(parsed)
+                                        showConnectionDialog = false
+                                    }
+                                }
+                                .addOnFailureListener { e ->
+                                    globalToastMessage = "QR Scan failed. Please try again or enter IP manually."
+                                    android.util.Log.e("QRScan", "Scan failed", e)
+                                }
+                        },
+                        onStartDiscovery = { cb -> networkController.startDiscovery(cb) },
+                        onStopDiscovery = { networkController.stopDiscovery() },
+                        themeMode = themeMode
+                    )
+                }
+            }
+
+            if (showLayoutManager) {
+                Box(modifier = Modifier.zIndex(100f).fillMaxSize()) {
+                    LayoutManagerScreen(
+                        layouts = profileList,
+                        activeProfile = currentProfileName,
+                        onBack = { showLayoutManager = false },
+                        onCreate = {
+                            isCreatingNew = true
+                            showLayoutEditor = true
+                            showLayoutManager = false
+                        },
+                        onSelect = { name -> currentProfileName = name },
+                        onEdit = { name ->
+                            currentProfileName = name
+                            isCreatingNew = false
+                            showLayoutEditor = true
+                            showLayoutManager = false
+                        },
+                        onRename = { oldName, newName ->
+                            if (layoutStore.renameProfile(oldName, newName)) {
+                                if (currentProfileName == oldName) currentProfileName = newName
+                                profileList = layoutStore.profileList()
+                            }
+                        },
+                        onDelete = { name ->
+                            layoutStore.deleteProfile(name)
+                            if (currentProfileName == name) {
+                                currentProfileName = layoutStore.profileList().firstOrNull()
+                                    ?: LayoutStore.DEFAULT_PROFILE
+                            }
+                            profileList = layoutStore.profileList()
+                        },
+                        themeMode = themeMode
+                    )
+                }
+            }
+
+            if (showLayoutEditor) {
+                Box(Modifier.fillMaxSize().zIndex(200f)) {
+                    LayoutEditorScreen(
+                        initialConfigs = configs.toMap(),
+                        controllerType = controllerType,
+                        onBack = { showLayoutEditor = false; isCreatingNew = false },
+                        onSave = { edited ->
+                            tempConfigsForSave.clear()
+                            tempConfigsForSave.putAll(edited)
+                            if (isCreatingNew) {
+                                showNameDialog = true
+                            } else {
+                                layoutStore.save(edited, currentProfileName, controllerType)
+                                configs.clear()
+                                configs.putAll(edited)
+                                showLayoutEditor = false
+                            }
+                        },
+                        themeMode = themeMode
+                    )
+                }
+            }
+
+            if (showNameDialog) {
+                InputDialog(
+                    title = "Name Your Layout",
+                    initialValue = "",
+                    isLight = themeMode == "Light",
+                    onDismiss = { showNameDialog = false },
+                    onConfirm = { name ->
+                        layoutStore.save(tempConfigsForSave, name, controllerType)
+                        currentProfileName = name
+                        profileList = layoutStore.profileList()
+                        showNameDialog = false
+                        showLayoutEditor = false
+                        isCreatingNew = false
+                    }
+                )
+            }
+
+            // DS4 lightbar / Buzz lamp colour pushed by the PC.
+            ledColor?.let { c ->
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .background(c)
+                        .zIndex(2001f)
+                )
+            }
+
+            GlobalToast(globalToastMessage) { globalToastMessage = null }
+        }
+    }
+
+    /** Lightbar colour last requested by the PC — DS4 lightbar or Buzz lamp. */
+    private var ledColor by mutableStateOf<Color?>(null)
+
+    // ---------------------------------------------------------------- targets
+
+    private fun loadSavedTarget(): ConnectionTarget? {
+        val ip = prefs.getString("last_ip", null)?.takeIf { QrPayload.isIpv4(it) } ?: return null
+        val port = prefs.getInt("last_port", Protocol.DEFAULT_PORT)
+        return ConnectionTarget(ip, port, tokenFor(ip))
+    }
+
+    private fun saveTarget(t: ConnectionTarget) {
+        val editor = prefs.edit()
+            .putString("last_ip", t.ip)
+            .putInt("last_port", t.port)
+        // Tokens are stored per server IP so reconnects are automatic (protocol §8).
+        if (t.token.isNotEmpty()) editor.putString("token_${t.ip}", t.token)
+        editor.apply()
+    }
+
+    private fun tokenFor(ip: String): String = prefs.getString("token_$ip", "") ?: ""
+
+    /**
+     * Validates user/QR input and fills in a previously stored token for that host.
+     * Returns null when the input is neither a `NEXUSPAD2:` payload nor a bare IPv4.
+     */
+    private fun resolveTarget(raw: String): ConnectionTarget? {
+        val parsed = QrPayload.parse(raw) ?: return null
+        return if (parsed.token.isEmpty()) parsed.copy(token = tokenFor(parsed.ip)) else parsed
+    }
+
+    private fun friendlyError(msg: String): String = when {
+        RejectReason.entries.any { it.message == msg } -> msg
+        msg.contains("failed to connect", ignoreCase = true) ->
+            "Can't find PC. Check if server is running and firewall is off."
+        msg.contains("Connection refused", ignoreCase = true) ->
+            "Server refused connection. Ensure the PC app is open."
+        msg.contains("timeout", ignoreCase = true) || msg.contains("timed out", ignoreCase = true) ->
+            "Connection timed out. Check your IP Address."
+        msg.contains("Network is unreachable", ignoreCase = true) ->
+            "No network. Check your Wi-Fi or USB connection."
+        msg.contains("EOF", ignoreCase = true) || msg.contains("closed the connection", ignoreCase = true) ->
+            "Disconnected. Server app was closed."
+        else -> "Connection Error: $msg"
+    }
+
+    // ---------------------------------------------------------------- lifecycle
+
+    override fun onDestroy() {
+        super.onDestroy()
+        networkController.disconnect()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        sensor?.also { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        sensorManager.unregisterListener(this)
+    }
+
+    override fun onSensorChanged(event: SensorEvent?) {
+        if (event?.sensor?.type == Sensor.TYPE_ROTATION_VECTOR) {
+            val rotationMatrix = FloatArray(9)
+            SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+
+            // Landscape remap: side buttons up/down.
+            val remappedMatrix = FloatArray(9)
+            SensorManager.remapCoordinateSystem(rotationMatrix, SensorManager.AXIS_Y, SensorManager.AXIS_MINUS_X, remappedMatrix)
+
+            val orientation = FloatArray(3)
+            SensorManager.getOrientation(remappedMatrix, orientation)
+
+            gyroPitch = (orientation[1] * 10000).toInt()
+            gyroRoll = (orientation[2] * 10000).toInt()
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+}
