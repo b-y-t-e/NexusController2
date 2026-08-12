@@ -1,5 +1,8 @@
 """Virtual pad behaviour, exercised through FakePad (no ViGEmBus required)."""
 
+import sys
+import types
+
 import pytest
 
 from nexus_server import devices
@@ -154,6 +157,22 @@ class _Names:
         return name
 
 
+def _install_fake_vigem(monkeypatch, get_user_index):
+    """Stand in for ``vgamepad.win.vigem_client`` without importing the real one.
+
+    Injected into ``sys.modules`` rather than patched onto the installed package,
+    so these tests run on a machine that has no vgamepad and no driver at all —
+    which is the whole point of this file.
+    """
+    client = types.ModuleType("vgamepad.win.vigem_client")
+    client.vigem_target_x360_get_user_index = get_user_index
+    win = types.ModuleType("vgamepad.win")
+    win.vigem_client = client
+    monkeypatch.setitem(sys.modules, "vgamepad", types.ModuleType("vgamepad"))
+    monkeypatch.setitem(sys.modules, "vgamepad.win", win)
+    monkeypatch.setitem(sys.modules, "vgamepad.win.vigem_client", client)
+
+
 class TestXbox360Pad:
     def _pad(self):
         spy = _SpyGamepad()
@@ -195,6 +214,52 @@ class TestXbox360Pad:
         pad.close()
         pad.apply(InputState())  # must not raise
         assert spy.resets == 1
+
+    def test_user_index_is_none_when_vigem_cannot_answer(self):
+        """No driver, no export, no answer — and no exception either.
+
+        The number is decoration on a dashboard; failing to read it must never
+        cost anything more than the badge not appearing.
+        """
+        _, pad = self._pad()
+        assert pad.user_index is None
+
+    def test_user_index_is_read_and_then_cached(self, monkeypatch):
+        calls = []
+
+        def get_user_index(busp, devicep, out):
+            calls.append((busp, devicep))
+            out.contents.value = 3
+            return 0x20000000  # VIGEM_ERROR_NONE
+
+        _install_fake_vigem(monkeypatch, get_user_index)
+        spy, pad = self._pad()
+        spy._busp, spy._devicep = "bus", "device"
+
+        assert pad.user_index == 3
+        assert pad.user_index == 3
+        assert calls == [("bus", "device")], "the answer does not change; ask once"
+
+    def test_user_index_is_none_until_windows_assigns_one(self, monkeypatch):
+        """Not-yet-assigned is a normal answer in the first moments, not a value.
+
+        The out parameter is left at zero on failure, so trusting it without
+        checking the result code would report every pad as player 1.
+        """
+        def get_user_index(busp, devicep, out):
+            return 0xE0000001  # VIGEM_ERROR_BUS_NOT_FOUND, out untouched
+
+        _install_fake_vigem(monkeypatch, get_user_index)
+        spy, pad = self._pad()
+        spy._busp, spy._devicep = "bus", "device"
+        assert pad.user_index is None
+
+    def test_a_closed_pad_has_no_user_index(self, monkeypatch):
+        _install_fake_vigem(monkeypatch, lambda *a: 0 / 0)  # must never be called
+        spy, pad = self._pad()
+        spy._busp, spy._devicep = "bus", "device"
+        pad.close()
+        assert pad.user_index is None
 
 
 class TestDualShock4Pad:

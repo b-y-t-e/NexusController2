@@ -172,7 +172,7 @@ is required.
 
 | opcode | payload | meaning |
 | --- | --- | --- |
-| `0x11` WELCOME | `slot:uint8, features:uint8` | handshake accepted; `slot` is 0-based. features bit0 = rumble available, bit1 = LED available |
+| `0x11` WELCOME | `slot:uint8, features:uint8` | handshake accepted; `slot` is 0-based and below the server's slot count (`MAX_PLAYERS`, currently 8). features bit0 = rumble available, bit1 = LED available |
 | `0x1F` REJECT | `reason:uint8` | handshake refused, server closes immediately |
 | `0x03` RUMBLE | `large:uint8, small:uint8` | force feedback, `0`…`255` |
 | `0x12` LED | `r:uint8, g:uint8, b:uint8` | DS4 lightbar colour / Buzz lamp (non-zero = lamp on) |
@@ -185,10 +185,10 @@ Reject reasons:
 | --- | --- |
 | `0x01` | unsupported protocol version |
 | `0x02` | invalid token |
-| `0x03` | server full |
-| `0x04` | malformed handshake |
+| `0x03` | no free player slot **right now** — every slot taken, the handshake queue full, or the server stopping. Transient: a client should keep retrying |
+| `0x04` | malformed handshake — the HELLO arrived and was wrong. A connection that sends nothing at all is closed without a REJECT: there is no malformed message to complain about, and nobody listening |
 | `0x05` | unauthenticated (non-HELLO sent first) |
-| `0x06` | rate limited / too many failed attempts |
+| `0x06` | rate limited — too many *failed credentials* from this address. A client may treat this as final and stop retrying, so the server must never use it for a transient condition |
 
 ---
 
@@ -232,16 +232,42 @@ characters, and shows it as a QR code containing exactly:
 NEXUSPAD2:<ip>:<port>:<token>
 ```
 
-The token rotates on every server start unless the user pins it. Clients store the
-token per server IP so reconnects are automatic.
+The token is **kept across restarts by default**, so a phone that has been paired
+stays paired; the user can ask for it to be rotated on every start instead. Clients
+store the token per server IP, which is what makes reconnecting automatic — and is
+why rotating it means rescanning the QR code on every one of them.
+
+`<token>` is 1–64 hex characters, **or empty** when the user has turned pairing
+off. An empty token is a valid payload and means "this server accepts any HELLO":
+a client must accept such a QR code rather than treat it as garbage. What it then
+puts in the token field of its HELLO is its own business — the server ignores the
+field entirely while pairing is off, so a client is free to send an empty token or
+to reuse one it remembers for that address. An empty token must not be confused
+with a malformed payload: three colon-separated fields (`NEXUSPAD2:<ip>:<port>`)
+is malformed, four with the last one empty is not.
 
 ---
 
 ## 9. Rate limiting
 
 * Max **1000 INPUT messages/second** per connection; excess is dropped and counted.
+  A client should send on *change* rather than on a timer — a pad nobody is
+  touching has nothing to report — with a slow heartbeat so a lost packet
+  cannot strand the server on a stale state.
 * Max **5 failed handshakes per source IP per 60 s**, then `REJECT(0x06)` without
-  even parsing the token.
+  even parsing the token. That budget is for *wrong credentials* — a bad token, a
+  bad version, a malformed HELLO.
+* Silence is counted separately and far more loosely (**30 per 60 s**): a
+  connection held open without sending a HELLO is indistinguishable from a phone
+  whose Wi-Fi dropped mid-handshake, and clients retry every few seconds, so
+  spending the credentials budget on it would let a bad minute of network lock a
+  legitimate phone out. A connection closed again straight away costs nothing at
+  all, because port scans and health checks look exactly like that.
+* A **player slot is reserved only after a valid HELLO**, so an unauthenticated
+  connection cannot occupy one. The server refuses with `REJECT(0x03)` before the
+  handshake when no slot is free at all, and likewise when too many handshakes are
+  already in flight — that is a transient condition, so it must **not** be
+  reported as `REJECT(0x06)`, which clients are entitled to treat as permanent.
 
 ---
 

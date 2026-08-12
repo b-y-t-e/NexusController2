@@ -140,9 +140,19 @@ class PlayerSession:
         return time.monotonic() - self.connected_at if self.connected else 0.0
 
     def snapshot(self) -> dict:
+        # Read once: the client thread can release the session between lines, and
+        # a dashboard row that says "connected" with no pad is worse than a stale
+        # one that is at least self-consistent.
+        pad = self.pad
         return {
             "slot": self.index,
             "connected": self.connected,
+            # Taken by a client that has passed the handshake but whose pad is
+            # still being created. Without this the dashboard shows the slot as
+            # free for that moment, which is exactly when someone looking at it
+            # is trying to work out where their phone went.
+            "reserved": self.reserved,
+            "xinput_index": pad.user_index if pad is not None else None,
             "name": self.name,
             "address": self.address[0] if self.address else "",
             "device_type": int(self.device_type),
@@ -185,6 +195,16 @@ class SlotAllocator:
                     return session
         return None
 
+    def has_free(self) -> bool:
+        """Whether a slot is free *right now*.
+
+        Only a hint: the caller cannot rely on the slot still being there, which
+        is why :meth:`acquire` is the one that actually decides. It exists so the
+        accept loop can turn a hopeless connection away before it costs a thread.
+        """
+        with self._lock:
+            return any(not session.reserved for session in self.sessions)
+
     def release(self, session: PlayerSession) -> None:
         with self._lock:
             session.release()
@@ -223,25 +243,34 @@ class RateLimiter:
 
 @dataclass
 class AttemptTracker:
-    """Counts failed handshakes per source address inside a sliding window."""
+    """Counts failed handshakes per source address inside a sliding window.
+
+    Locked, because the accept thread asks and every client thread answers: the
+    pruning does ``bucket[:] = [...]`` while another thread may be appending, and
+    a lost record is a failed attempt that never counted.
+    """
 
     max_attempts: int = 5
     window: float = 60.0
     _attempts: dict[str, list[float]] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def record_failure(self, host: str, *, now: float | None = None) -> None:
         current = now if now is not None else time.monotonic()
-        bucket = self._attempts.setdefault(host, [])
-        bucket.append(current)
-        self._prune(host, current)
+        with self._lock:
+            bucket = self._attempts.setdefault(host, [])
+            bucket.append(current)
+            self._prune(host, current)
 
     def is_blocked(self, host: str, *, now: float | None = None) -> bool:
         current = now if now is not None else time.monotonic()
-        self._prune(host, current)
-        return len(self._attempts.get(host, ())) >= self.max_attempts
+        with self._lock:
+            self._prune(host, current)
+            return len(self._attempts.get(host, ())) >= self.max_attempts
 
     def clear(self, host: str) -> None:
-        self._attempts.pop(host, None)
+        with self._lock:
+            self._attempts.pop(host, None)
 
     def _prune(self, host: str, now: float) -> None:
         bucket = self._attempts.get(host)

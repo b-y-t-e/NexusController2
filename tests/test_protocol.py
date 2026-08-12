@@ -228,7 +228,43 @@ class TestPairingPayload:
         assert P.PairingPayload.decode(text) == P.PairingPayload("192.168.1.10", 6000, "ab" * 16)
 
     def test_whitespace_tolerated(self):
-        assert P.PairingPayload.decode("  NEXUSPAD2:10.0.0.1:6000:tok \n").ip == "10.0.0.1"
+        assert P.PairingPayload.decode("  NEXUSPAD2:10.0.0.1:6000:beef \n").ip == "10.0.0.1"
+
+    @pytest.mark.parametrize(
+        "address",
+        [
+            "1.2.3.²",       # superscript two: str.isdigit() is true, int() raises
+            "١.2.3.4",       # Arabic-Indic one: int() accepts it, Kotlin's \d does not
+            "1.2.3",
+            "1.2.3.4.5",
+            "1.2.3.256",
+            "1.2.3.01",
+            "1.2.3.",
+        ],
+    )
+    def test_only_ascii_dotted_quads_decode(self, address):
+        """Every rejection must be a ProtocolError, never a stray ValueError."""
+        with pytest.raises(ProtocolError):
+            P.PairingPayload.decode(f"NEXUSPAD2:{address}:6000:abcd")
+
+    @pytest.mark.parametrize("token", ["not-hex!", "zz", "g" * 4, "a" * 65])
+    def test_token_charset_is_enforced(self, token):
+        """The phone rejects these (QrPayloadTest), so the reference must too."""
+        with pytest.raises(ProtocolError):
+            P.PairingPayload.decode(f"NEXUSPAD2:10.0.0.1:6000:{token}")
+        with pytest.raises(ProtocolError):
+            P.encode_pairing_payload("10.0.0.1", 6000, token)
+
+    def test_empty_token_means_pairing_is_off(self):
+        """§8: four fields with an empty last one is legal, three fields is not.
+
+        This is the exact string the dashboard renders when the user unticks
+        "Require pairing token"; the Kotlin ``QrPayloadTest`` asserts the same
+        payload parses on the phone.
+        """
+        text = P.encode_pairing_payload("192.168.1.10", 6000, "")
+        assert text == "NEXUSPAD2:192.168.1.10:6000:"
+        assert P.PairingPayload.decode(text) == P.PairingPayload("192.168.1.10", 6000, "")
 
     @pytest.mark.parametrize(
         "text", ["", "192.168.1.10", "NEXUSPAD1:1.2.3.4:6000:t", "NEXUSPAD2:1.2.3.4:x:t", "NEXUSPAD2:a:b"]
@@ -238,7 +274,10 @@ class TestPairingPayload:
             P.PairingPayload.decode(text)
 
     def test_ipv6_refused(self):
-        with pytest.raises(ProtocolError, match="IPv6"):
+        # Now refused as "not an IPv4 address" — the payload format has one
+        # field for the host and colons are its separator, so IPv6 was never
+        # merely unsupported, it was unrepresentable.
+        with pytest.raises(ProtocolError, match="IPv4"):
             P.encode_pairing_payload("::1", 6000, "t")
 
 

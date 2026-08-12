@@ -32,10 +32,35 @@ from .system import FirewallManager, remove_adb_reverse, setup_adb_reverse
 
 log = logging.getLogger(__name__)
 
-MAX_PLAYERS = 4
+MAX_PLAYERS = P.MAX_PLAYERS
 HANDSHAKE_TIMEOUT = 5.0
-IDLE_TIMEOUT = 30.0
-#: Generous ceiling — a phone streams ~66 frames/s, so this only catches floods.
+#: How long a settled client may say nothing before its slot is reclaimed.
+#:
+#: A phone that walks out of range, runs out of battery or is killed by the OS
+#: never sends a FIN, so silence is the only evidence that it has gone — and
+#: until it is acted on, the slot stays taken *and* the virtual pad stays plugged
+#: in, frozen on its last frame. The phone reconnecting meanwhile is handed a
+#: second slot beside its own ghost.
+#:
+#: The client sends on change with a heartbeat every 250 ms (PROTOCOL.md §9), so
+#: this is roughly thirty missed beats: comfortably longer than a Wi-Fi hiccup,
+#: which the TCP connection itself rides out, and far shorter than the 30 s this
+#: used to be, when the ghost outlived most attempts to reconnect.
+IDLE_TIMEOUT = 8.0
+#: How many connections may be mid-handshake at once. A peer that connects and
+#: then says nothing costs no player slot (those are handed out only after a
+#: valid HELLO), but it still costs a thread, so the queue is capped too.
+MAX_PENDING_HANDSHAKES = 8
+#: How many refusals may be politely drained at the same time.
+MAX_PENDING_REJECTS = 8
+#: Connections per source IP per minute that may go quiet before it is treated as
+#: abuse. Deliberately far looser than the limit on bad credentials.
+SILENT_ATTEMPT_LIMIT = 30
+#: Wall-clock ceiling on draining one refused connection.
+REJECT_DRAIN_SECONDS = 1.0
+#: Generous ceiling. A phone sends on *change*, polling its own controls every
+#: 4 ms, so a frantic thumb peaks near 250 frames/s and a still pad sends four.
+#: This only catches floods.
 INPUT_RATE_LIMIT = 1000.0
 
 LogSink = Callable[[str], None]
@@ -69,7 +94,20 @@ class ControllerServer:
         self._threads: list[threading.Thread] = []
         self._lock = threading.Lock()
         self._attempts = AttemptTracker()
+        # A connection that goes quiet is counted separately, and far more
+        # tolerantly, than a wrong token. Wi-Fi that drops between connect() and
+        # HELLO produces exactly the same trace as an attack, and the phone
+        # retries every 3 s — five strikes would let a flaky network lock a
+        # legitimate phone out of its own PC, permanently, since RATE_LIMITED is
+        # a verdict the client treats as final.
+        self._silent = AttemptTracker(max_attempts=SILENT_ATTEMPT_LIMIT)
         self._firewall: FirewallManager | None = None
+        # A gate, not a counter: stop() swaps in a fresh one, so a handshake
+        # thread that finishes afterwards releases the *old* gate and cannot
+        # hand the new server a place it never took.
+        self._handshake_capacity = MAX_PENDING_HANDSHAKES
+        self._handshake_gate = threading.Semaphore(self._handshake_capacity)
+        self._reject_slots = threading.Semaphore(MAX_PENDING_REJECTS)
 
         self.bind_ip = ""
         self.total_packets = 0
@@ -112,7 +150,10 @@ class ControllerServer:
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 listener.bind((bind_ip, self.settings.port))
-                listener.listen(MAX_PLAYERS)
+                # Room for every player plus the handshakes that may be queued
+                # behind them, so a burst is refused by us — with a reason the
+                # phone can show — rather than dropped by the kernel.
+                listener.listen(MAX_PLAYERS + MAX_PENDING_HANDSHAKES)
             except OSError as exc:
                 listener.close()
                 self.last_error = f"Cannot bind {bind_ip}:{self.settings.port} — {exc}"
@@ -148,6 +189,11 @@ class ControllerServer:
                         pass
             self._listener = None
             self._discovery = None
+
+        # Handshake threads are daemons: at shutdown some may never reach the
+        # finally that gives their place back. A fresh gate starts the next
+        # start() at full capacity while the old one absorbs the late releases.
+        self._handshake_gate = threading.Semaphore(self._handshake_capacity)
 
         self.slots.release_all()
         self.desktop.release_all()
@@ -194,24 +240,126 @@ class ControllerServer:
             except OSError:
                 break
 
+            # Every rejection below is dispatched to a short-lived thread: the
+            # polite close in _reject() can take REJECT_DRAIN_SECONDS, and doing
+            # that here would stall the accept loop — which is exactly what a
+            # flood of bad connections wants.
             if self._attempts.is_blocked(address[0]):
-                self._reject(conn, RejectReason.RATE_LIMITED)
+                # Bad credentials, repeatedly: RATE_LIMITED is the right verdict
+                # and the client is right to treat it as final.
+                self._reject_async(conn, RejectReason.RATE_LIMITED)
                 self._log(f"Blocked {address[0]}: too many failed attempts")
                 continue
 
-            session = self.slots.acquire()
-            if session is None:
-                self._reject(conn, RejectReason.SERVER_FULL)
+            if self._silent.is_blocked(address[0]):
+                # Silence is different, and answering it with RATE_LIMITED undid
+                # the whole point of counting it separately: the phone stops
+                # reconnecting for good, which is precisely what a phone with bad
+                # Wi-Fi must not have happen to it. SERVER_FULL says "not now".
+                self._reject_async(conn, RejectReason.SERVER_FULL)
+                self._log(f"Rejected {address[0]}: too many connections went quiet")
+                continue
+
+            if not self.slots.has_free():
+                self._reject_async(conn, RejectReason.SERVER_FULL)
                 self._log(f"Rejected {address[0]}: all {len(self.slots)} slots in use")
+                continue
+
+            gate = self._begin_handshake()
+            if gate is None:
+                # SERVER_FULL, not RATE_LIMITED: the queue being busy is a
+                # transient capacity problem, and the phone treats RATE_LIMITED
+                # as permanent — it sets handshakeBlocked and stops auto
+                # reconnecting until the user intervenes. Turning a burst of
+                # connections into a permanent lockout of an innocent phone is
+                # exactly the denial of service this cap exists to prevent.
+                self._reject_async(conn, RejectReason.SERVER_FULL)
+                self._log(f"Rejected {address[0]}: too many handshakes in flight")
                 continue
 
             thread = threading.Thread(
                 target=self._serve_client,
-                args=(conn, address, session),
-                name=f"nexus-client-{session.index}",
+                args=(conn, address, gate),
+                name=f"nexus-handshake-{address[0]}",
                 daemon=True,
             )
-            thread.start()
+            try:
+                thread.start()
+            except RuntimeError as exc:
+                # Out of OS threads. Letting this escape would end the accept
+                # loop while `running` stayed true — the server would look alive
+                # and quietly refuse everything from then on.
+                gate.release()
+                self._log(f"Cannot serve {address[0]}: {exc}")
+                self._reject_async(conn, RejectReason.SERVER_FULL)
+
+    @property
+    def handshakes_in_flight(self) -> int:
+        """How many connections are mid-handshake. Reads the gate's own count."""
+        return self._handshake_capacity - self._handshake_gate._value  # noqa: SLF001
+
+    def _begin_handshake(self) -> threading.Semaphore | None:
+        """Take a place in the handshake queue, or ``None`` when it is full.
+
+        The caller keeps the gate it was given and releases *that* one, so a
+        thread outliving a restart cannot credit the new server.
+        """
+        gate = self._handshake_gate
+        return gate if gate.acquire(blocking=False) else None
+
+    def _reject_bounded(self, conn: socket.socket, reason: RejectReason) -> None:
+        """Reject on *this* thread, but only if the drain budget allows it.
+
+        Handshake failures used to drain straight from the client thread, which
+        had already given up its place in the handshake queue by then — so the
+        number of sockets being politely drained at once was bounded by nothing.
+        The permit is what actually caps it; the queue caps something else.
+        """
+        if not self._reject_slots.acquire(blocking=False):
+            self._close_quietly(conn)
+            return
+        try:
+            self._reject(conn, reason)
+        finally:
+            self._reject_slots.release()
+
+    @staticmethod
+    def _close_quietly(conn: socket.socket) -> None:
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+    def _reject_async(self, conn: socket.socket, reason: RejectReason) -> None:
+        """Reject on a helper thread, or bluntly when too many are already busy.
+
+        The courtesy of a drained close is worth one thread, not an unbounded
+        number of them: a flood of bad connections would otherwise spawn one
+        thread each, and each of those can be held open by a peer that trickles
+        bytes. Past the cap the socket is simply closed — a peer behaving that
+        badly has forfeited the explanation.
+        """
+        if not self._reject_slots.acquire(blocking=False):
+            self._close_quietly(conn)
+            return
+
+        def run() -> None:
+            try:
+                self._reject(conn, reason)
+            finally:
+                self._reject_slots.release()
+
+        try:
+            threading.Thread(target=run, name="nexus-reject", daemon=True).start()
+        except RuntimeError:
+            # The thread never ran, so its finally never will either: release the
+            # permit here or the cap leaks one place on every failure until no
+            # refusal can be explained at all.
+            self._reject_slots.release()
+            try:
+                conn.close()
+            except OSError:
+                pass
 
     @staticmethod
     def _reject(conn: socket.socket, reason: RejectReason) -> None:
@@ -221,13 +369,19 @@ class ControllerServer:
         the OS send an RST, which discards the reject message we just wrote — so
         the client would see only "connection reset" and could not explain the
         failure to the user. Half-close and drain first.
+
+        The drain has a wall-clock deadline as well as a byte ceiling. The
+        per-recv timeout alone is not a bound: a peer trickling one byte at a
+        time refreshes it on every call and can keep the thread for as long as it
+        likes.
         """
         try:
             conn.sendall(P.encode_reject(reason))
             conn.shutdown(socket.SHUT_WR)
             conn.settimeout(0.5)
+            deadline = time.monotonic() + REJECT_DRAIN_SECONDS
             drained = 0
-            while drained < 64 * 1024:
+            while drained < 64 * 1024 and time.monotonic() < deadline:
                 chunk = conn.recv(4096)
                 if not chunk:
                     break
@@ -242,31 +396,101 @@ class ControllerServer:
 
     # -- per-client handling ------------------------------------------------
 
-    def _serve_client(self, conn: socket.socket, address, session: PlayerSession) -> None:
+    def _serve_client(self, conn: socket.socket, address, gate: threading.Semaphore) -> None:
+        session: PlayerSession | None = None
+        #: Set while this connection still occupies a place in the handshake
+        #: queue; a settled client must not keep one for its whole session.
+        pending = True
+
+        def leave_queue() -> None:
+            """Give up the place in the handshake queue as soon as it is settled.
+
+            Before the refusal is written, not after: draining a rejected peer
+            can take REJECT_DRAIN_SECONDS, and holding a queue place for that
+            long would let slow refusals crowd out real phones.
+            """
+            nonlocal pending
+            if pending:
+                gate.release()
+                pending = False
+
         try:
             conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             conn.settimeout(HANDSHAKE_TIMEOUT)
-            reader = _SocketReader(conn)
+            # A deadline for the whole handshake, not just for each read of it.
+            reader = _SocketReader(conn, deadline=time.monotonic() + HANDSHAKE_TIMEOUT)
 
             try:
                 hello = self._read_hello(reader)
             except ProtocolError as exc:
+                leave_queue()
                 self._attempts.record_failure(address[0])
                 self._log(f"Handshake failed from {address[0]}: {exc}")
-                self._reject(conn, RejectReason.MALFORMED)
+                self._reject_bounded(conn, RejectReason.MALFORMED)
                 return
-            except (OSError, socket.timeout):
-                self._reject(conn, RejectReason.MALFORMED)
+            except socket.timeout as exc:
+                # Holding the socket open and saying nothing is what an attempt
+                # to exhaust the handshake queue looks like — but it is also what
+                # a phone whose Wi-Fi dropped mid-handshake looks like, so it
+                # goes in its own, much more forgiving bucket.
+                leave_queue()
+                self._silent.record_failure(address[0])
+                log.debug("handshake from %s never arrived: %s", address[0], exc)
+                # No REJECT: MALFORMED says "your HELLO was wrong", and nothing
+                # arrived to be wrong. A peer that sent nothing has nothing to
+                # be told, so the socket is simply closed.
+                self._close_quietly(conn)
+                return
+            except OSError as exc:
+                # Connect-then-close, deliberately *not* counted at all. That is
+                # what a port scanner, a health check and half the network tooling
+                # on a LAN do, it costs the server nothing, and counting it would
+                # let any such probe lock a phone sharing that IP out for a minute.
+                leave_queue()
+                log.debug("connection from %s went away before HELLO: %s", address[0], exc)
+                # The peer has already gone; there is nobody left to explain to.
+                self._close_quietly(conn)
                 return
 
             reason = self._validate(hello)
             if reason is not None:
+                leave_queue()
                 self._attempts.record_failure(address[0])
                 self._log(f"Rejected {address[0]}: {reason.message}")
-                self._reject(conn, reason)
+                self._reject_bounded(conn, reason)
                 return
 
             self._attempts.clear(address[0])
+            self._silent.clear(address[0])
+            leave_queue()
+
+            # Only an authenticated peer costs a player slot. The reservation is
+            # still atomic — SlotAllocator.acquire() is the compare-and-set that
+            # the v1 race was missing — it simply happens one step later, so an
+            # unauthenticated connection can no longer hold a slot hostage for
+            # the length of the handshake timeout.
+            if not self.running:
+                # stop() can land in the middle of a handshake. Going on would
+                # create a virtual pad and occupy a slot on a server that has
+                # already released everything, leaving a phantom device behind.
+                self._reject_bounded(conn, RejectReason.SERVER_FULL)
+                return
+
+            session = self.slots.acquire()
+            if session is None:
+                self._log(f"Rejected {address[0]}: all {len(self.slots)} slots in use")
+                self._reject_bounded(conn, RejectReason.SERVER_FULL)
+                return
+            if not self.running:
+                # stop() can land between the check above and this line, after
+                # release_all() has already run — the slot would then stay
+                # reserved for the life of the process.
+                self.slots.release(session)
+                session = None
+                self._reject_bounded(conn, RejectReason.SERVER_FULL)
+                return
+            threading.current_thread().name = f"nexus-client-{session.index}"
+
             self._warn_if_no_xinput_slot(hello.device_type)
             try:
                 pad = self.backend.create(
@@ -277,7 +501,7 @@ class ControllerServer:
             except DriverUnavailableError as exc:
                 self.last_error = str(exc)
                 self._log(f"Cannot create {hello.device_type.label}: {exc}")
-                self._reject(conn, RejectReason.MALFORMED)
+                self._reject_bounded(conn, RejectReason.MALFORMED)
                 return
 
             session.attach(conn, address)
@@ -286,7 +510,12 @@ class ControllerServer:
             session.name = hello.name or f"Player {session.index + 1}"
             session.keys.set_bindings(self.settings.key_bindings.get(str(session.index), {}))
 
-            conn.sendall(P.encode_welcome(session.index, pad.features))
+            # Through session.send(), not conn.sendall(): the pad exists by now,
+            # so a rumble callback can already be writing from a ViGEm thread and
+            # the two writes must not interleave.
+            if not session.send(P.encode_welcome(session.index, pad.features)):
+                return
+            reader.clear_deadline()
             conn.settimeout(IDLE_TIMEOUT)
             self._log(
                 f"Slot {session.index + 1}: {session.name} @ {address[0]} "
@@ -294,16 +523,24 @@ class ControllerServer:
             )
             self._client_loop(reader, session)
         except (OSError, socket.timeout) as exc:
-            log.debug("slot %d transport error: %s", session.index, exc)
+            log.debug("transport error from %s: %s", address[0], exc)
         except Exception:  # noqa: BLE001 - one bad client must not take down the server
-            log.exception("unhandled error serving slot %d", session.index)
+            log.exception("unhandled error serving %s", address[0])
         finally:
-            name = session.name or f"Slot {session.index + 1}"
-            was_connected = session.connected
-            self._release_keys(session)
-            self.slots.release(session)
-            if was_connected:
-                self._log(f"{name} disconnected")
+            leave_queue()
+            if session is not None:
+                name = session.name or f"Slot {session.index + 1}"
+                was_connected = session.connected
+                self._release_keys(session)
+                # release() closes the socket, but only the one it was given in
+                # attach(); anything that failed before that owns its own socket.
+                if not was_connected:
+                    self._close_quietly(conn)
+                self.slots.release(session)
+                if was_connected:
+                    self._log(f"{name} disconnected")
+            else:
+                self._close_quietly(conn)
 
     def _warn_if_no_xinput_slot(self, device_type: DeviceType) -> None:
         """Say so loudly when a pad is about to be created that games cannot see.
@@ -443,15 +680,19 @@ class ControllerServer:
             self._apply_mouse_mode(session, state)
             # Suppress pad output so the cursor and the game do not both react.
             state = InputState(buttons_high=high & int(P.DPad.GUIDE), flags=state.flags)
-        elif low != state.buttons_low or high != state.buttons_high:
-            state = InputState(
-                lx=state.lx, ly=state.ly, rx=state.rx, ry=state.ry,
-                buttons_low=low, buttons_high=high,
-                left_trigger=state.left_trigger, right_trigger=state.right_trigger,
-                roll=state.roll, pitch=state.pitch, flags=state.flags,
-            )
         else:
+            # Unconditionally, so that leaving mouse mode always re-centres the
+            # gyro: hanging this off the "no bound button is held" branch meant a
+            # bound button still down at that moment kept a stale centre, and the
+            # cursor jumped the next time mouse mode was entered.
             session.gyro_centre = None
+            if low != state.buttons_low or high != state.buttons_high:
+                state = InputState(
+                    lx=state.lx, ly=state.ly, rx=state.rx, ry=state.ry,
+                    buttons_low=low, buttons_high=high,
+                    left_trigger=state.left_trigger, right_trigger=state.right_trigger,
+                    roll=state.roll, pitch=state.pitch, flags=state.flags,
+                )
 
         pad = session.pad
         if pad is not None:
@@ -468,6 +709,26 @@ class ControllerServer:
             buttons |= MouseDelta.RIGHT
         self.desktop.handle_mouse(session.index, MouseDelta(dx, dy, buttons))
         session.mouse_buttons_held = buttons
+
+    def reset_desktop_state(self) -> None:
+        """Drop every key and mouse button the desktop feature is holding down.
+
+        Must be called whenever the gate itself moves — switching the feature off
+        or handing the desktop lock to another slot. The per-slot release path
+        goes through :meth:`DesktopControl.set_key`, which the gate refuses once
+        the slot no longer holds the lock, so without this a key held at that
+        moment stays pressed on the PC until the app is restarted.
+
+        **Call this only after the gate has already been shut.** Nothing here
+        stops an input frame arriving mid-reset and pressing the key again; what
+        stops it is that :meth:`DesktopControl.allows` is already refusing that
+        slot by the time this runs. The lock inside
+        :class:`~.desktop.KeyBindingEngine` makes each step atomic, not ordered.
+        """
+        for session in self.slots.sessions:
+            session.keys.release()
+            session.mouse_buttons_held = 0
+        self.desktop.release_all()
 
     def _release_keys(self, session: PlayerSession) -> None:
         for key, pressed in session.keys.release():
@@ -539,10 +800,22 @@ class ControllerServer:
 
 
 class _SocketReader:
-    """Blocking reader that always returns exactly the requested number of bytes."""
+    """Blocking reader that always returns exactly the requested number of bytes.
 
-    def __init__(self, sock: socket.socket) -> None:
+    Optionally under a wall-clock deadline. The socket's own timeout is per-recv
+    and restarts on every byte that arrives, so a peer trickling one byte at a
+    time never times out at all — it can hold a place in the handshake queue for
+    as long as it likes, and never be counted as a silent connection either. The
+    handshake needs a bound on the *whole* exchange, not on its quietest moment.
+    """
+
+    def __init__(self, sock: socket.socket, deadline: float | None = None) -> None:
         self._sock = sock
+        self._deadline = deadline
+
+    def clear_deadline(self) -> None:
+        """Drop the bound once the handshake is over; a session is long-lived."""
+        self._deadline = None
 
     def read(self, count: int) -> bytes:
         if count == 0:
@@ -550,6 +823,12 @@ class _SocketReader:
         chunks: list[bytes] = []
         remaining = count
         while remaining > 0:
+            if self._deadline is not None:
+                left = self._deadline - time.monotonic()
+                if left <= 0:
+                    raise socket.timeout("handshake took too long")
+                # Never lengthen the socket's own timeout, only shorten it.
+                self._sock.settimeout(min(self._sock.gettimeout() or left, left))
             chunk = self._sock.recv(remaining)
             if not chunk:
                 raise ConnectionError("peer closed the connection")

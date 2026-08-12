@@ -80,6 +80,35 @@ class TestKeyBindingEngine:
         assert engine.update(int(Button.SOUTH), 0) == [("space", True)]
         assert engine.update(0, 0) == [("space", False)]
 
+    def test_rebinding_a_held_button_releases_the_old_key(self):
+        """The held set is keyed by button, so after a swap the release looked up
+        the new key and the old one was never let go of."""
+        engine = KeyBindingEngine({"a": "space"})
+        engine.update(int(Button.SOUTH), 0)
+
+        assert engine.set_bindings({"a": "enter"}) == [("space", False)]
+        # ...and the new binding starts from "not held", so it can fire.
+        assert engine.update(int(Button.SOUTH), 0) == [("enter", True)]
+
+    def test_removing_a_binding_releases_its_key(self):
+        engine = KeyBindingEngine({"a": "space"})
+        engine.update(int(Button.SOUTH), 0)
+        assert engine.set_bindings({}) == [("space", False)]
+
+    def test_a_shared_key_is_not_released_while_another_button_holds_it(self):
+        """Two buttons, one key. Rebinding one must not let go for both."""
+        engine = KeyBindingEngine({"a": "space", "b": "space"})
+        engine.update(int(Button.SOUTH) | int(Button.EAST), 0)
+
+        assert engine.set_bindings({"a": "enter", "b": "space"}) == []
+
+    def test_an_unchanged_binding_keeps_its_held_state(self):
+        """Rebinding B must not make a held A repeat."""
+        engine = KeyBindingEngine({"a": "space", "b": "x"})
+        engine.update(int(Button.SOUTH), 0)
+        assert engine.set_bindings({"a": "space", "b": "y"}) == []
+        assert engine.update(int(Button.SOUTH), 0) == []
+
     def test_held_button_does_not_repeat(self):
         """At 66 frames/s a repeat would spam the key."""
         engine = KeyBindingEngine({"a": "space"})

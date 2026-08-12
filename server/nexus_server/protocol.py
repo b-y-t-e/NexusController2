@@ -20,6 +20,13 @@ DEFAULT_DISCOVERY_PORT: Final = 6001
 #: Longest fixed-size payload we ever read in one go (INPUT).
 INPUT_PAYLOAD_SIZE: Final = 16
 
+#: Player slots the server hands out. Independent of the four XInput slots
+#: Windows exposes: DualShock 4 pads are HID and consume none of them, so more
+#: than four phones can be genuinely useful. ``xinput.capacity_warning`` is what
+#: tells the user when an XInput-backed pad past the fourth will be invisible to
+#: games. The WELCOME slot byte allows up to 255.
+MAX_PLAYERS: Final = 8
+
 MAX_TOKEN_LEN: Final = 64
 MAX_NAME_LEN: Final = 32
 MAX_TEXT_LEN: Final = 255
@@ -75,7 +82,10 @@ class RejectReason(enum.IntEnum):
         return {
             RejectReason.BAD_VERSION: "Unsupported protocol version",
             RejectReason.BAD_TOKEN: "Invalid pairing token",
-            RejectReason.SERVER_FULL: "Server full",
+            # Also sent when the handshake queue is busy or the server is
+            # stopping: all three mean "not now", which is what the client needs
+            # to know — and the one thing RATE_LIMITED must never be used for.
+            RejectReason.SERVER_FULL: "No free player slot right now",
             RejectReason.MALFORMED: "Malformed handshake",
             RejectReason.UNAUTHENTICATED: "Handshake required first",
             RejectReason.RATE_LIMITED: "Too many failed attempts",
@@ -384,11 +394,46 @@ class DiscoveryResponse:
 # --- pairing payload --------------------------------------------------------
 
 QR_PREFIX: Final = "NEXUSPAD2"
+#: §8: 0–64 hex characters. Empty means the server does not require pairing.
+_HEX_DIGITS: Final = frozenset("0123456789abcdefABCDEF")
+
+
+def _valid_pairing_token(token: str) -> bool:
+    return len(token) <= MAX_TOKEN_LEN and all(ch in _HEX_DIGITS for ch in token)
+
+
+def valid_ipv4(text: str) -> bool:
+    """Dotted quad, no leading zeros — the same rule the phone applies.
+
+    ASCII digits only, checked explicitly. ``str.isdigit`` is true for characters
+    like ``²`` (which then makes ``int()`` raise, escaping this module as a bare
+    ValueError) and for Arabic-Indic digits (which ``int()`` happily accepts,
+    while the Kotlin side's ``\\d`` does not) — so the two implementations would
+    disagree about what a valid address is.
+    """
+    parts = text.split(".")
+    if len(parts) != 4:
+        return False
+    for part in parts:
+        if not part or not all(ch in "0123456789" for ch in part):
+            return False
+        if len(part) > 1 and part[0] == "0":
+            return False
+        if int(part) > 255:
+            return False
+    return True
 
 
 def encode_pairing_payload(ip: str, port: int, token: str) -> str:
-    if ":" in ip:
-        raise ProtocolError("IPv6 literals are not supported in the pairing payload")
+    # Validated on the way out as well as on the way in. An encoder that emits
+    # what its own decoder refuses is a rift waiting to happen, and this one is
+    # the source of every QR code the phone will ever scan.
+    if not valid_ipv4(ip):
+        raise ProtocolError(f"pairing payload needs an IPv4 address, got {ip!r}")
+    if not 1 <= port <= 65535:
+        raise ProtocolError(f"port out of range: {port}")
+    if not _valid_pairing_token(token):
+        raise ProtocolError("pairing token must be 0-64 hex characters")
     return f"{QR_PREFIX}:{ip}:{port}:{token}"
 
 
@@ -409,6 +454,14 @@ class PairingPayload:
             raise ProtocolError(f"bad port {parts[2]!r}") from exc
         if not 1 <= port <= 65535:
             raise ProtocolError(f"port out of range: {port}")
+        # Enforced, not merely documented: this decoder is the reference the
+        # Kotlin QrPayload is checked against, and it validated nothing while
+        # the phone rejected non-hex tokens — so the two could disagree about a
+        # payload without any test noticing.
+        if not _valid_pairing_token(parts[3]):
+            raise ProtocolError(f"bad pairing token {parts[3]!r}")
+        if not valid_ipv4(parts[1]):
+            raise ProtocolError(f"bad IPv4 address {parts[1]!r}")
         return cls(ip=parts[1], port=port, token=parts[3])
 
 

@@ -3,12 +3,15 @@
 import socket
 import struct
 import threading
+import time
 
 import pytest
 
 from nexus_server import protocol as P
+from nexus_server import server as server_module
 from nexus_server.buzz import BuzzButton
 from nexus_server.protocol import (
+    MAX_PLAYERS,
     Button,
     DeviceType,
     DPad,
@@ -119,10 +122,27 @@ class TestHandshake:
             assert client.read_message() == P.encode_reject(RejectReason.MALFORMED)
 
     def test_server_full(self, server):
-        clients = [Client(server).connect() for _ in range(4)]
+        clients = [Client(server).connect() for _ in range(MAX_PLAYERS)]
         try:
             with Client(server) as extra:
                 assert extra.read_message() == P.encode_reject(RejectReason.SERVER_FULL)
+        finally:
+            for client in clients:
+                client.close()
+
+    def test_every_slot_gets_its_own_pad(self, server, backend):
+        """A full house is ``MAX_PLAYERS`` distinct slots and distinct devices.
+
+        The one failure mode worth a test here is two clients sharing a slot —
+        they would then drive the same virtual pad and fight over it.
+        """
+        clients = [Client(server).connect() for _ in range(MAX_PLAYERS)]
+        try:
+            assert sorted(c.slot for c in clients) == list(range(MAX_PLAYERS))
+            wait_for(lambda: all(s.pad is not None for s in server.slots.sessions))
+            pads = [s.pad for s in server.slots.sessions]
+            assert len({id(pad) for pad in pads}) == MAX_PLAYERS
+            assert len(backend.created) == MAX_PLAYERS
         finally:
             for client in clients:
                 client.close()
@@ -135,12 +155,210 @@ class TestHandshake:
         with Client(server).connect() as second:
             assert second.slot == 0
 
+    def test_a_returning_phone_takes_the_next_free_slot(self, server):
+        """The slot a phone had is not "its" slot; it goes back in the pool.
+
+        The sequence that worries people: player 1 drops out, somebody else
+        connects and is given slot 1, and then the first phone comes back. It
+        must land on the lowest slot that is *actually* free — never share slot 1
+        with the phone that took it, and never be turned away because the slot it
+        used to have is occupied.
+        """
+        first = Client(server).connect()
+        second = Client(server).connect()
+        assert (first.slot, second.slot) == (0, 1)
+
+        first.close()
+        wait_for(lambda: not server.slots.sessions[0].connected)
+
+        with Client(server).connect() as third, Client(server).connect() as returning:
+            assert third.slot == 0, "the freed slot goes to whoever asks next"
+            assert returning.slot == 2, "the returning phone gets the next free slot"
+            assert len({third.slot, returning.slot, second.slot}) == 3
+        second.close()
+
+    def test_a_slot_is_reclaimed_when_the_phone_stops_answering(self, server, monkeypatch):
+        """A phone that vanishes without closing must not hold its slot for long.
+
+        Pulling the battery, walking out of range or killing the app leaves the
+        TCP connection open as far as this machine is concerned: no FIN arrives,
+        so the only evidence is silence. Until that is noticed the slot stays
+        taken *and* its virtual pad stays plugged in — the game sees a pad frozen
+        on its last frame, and the phone coming back is given a second slot
+        beside its own ghost.
+
+        The client sends at least a heartbeat every 250 ms (PROTOCOL.md §9), so
+        silence for ``IDLE_TIMEOUT`` is not a quiet moment; it is a peer that is
+        gone.
+        """
+        monkeypatch.setattr(server_module, "IDLE_TIMEOUT", 0.4)
+        client = Client(server).connect()
+        try:
+            pad = pad_for(server, 0)
+            # Deliberately no close(): closing would send a FIN and prove nothing.
+            wait_for(lambda: not server.slots.sessions[0].reserved, timeout=4.0)
+            assert pad.closed, "the virtual pad goes with the session"
+            with Client(server).connect() as returning:
+                assert returning.slot == 0
+        finally:
+            client.close()
+
     def test_repeated_bad_tokens_get_rate_limited(self, server):
         for _ in range(5):
             with Client(server, token="bad") as client:
                 assert client.hello()[1] == RejectReason.BAD_TOKEN
         with Client(server) as blocked:
             assert blocked.read_message() == P.encode_reject(RejectReason.RATE_LIMITED)
+
+    def test_a_silent_connection_holds_no_slot(self, server):
+        """Connecting and saying nothing must not cost a player slot.
+
+        Four sockets that never send a HELLO used to reserve every slot for the
+        whole handshake timeout and could repeat forever, locking real phones out.
+        """
+        silent = [
+            socket.create_connection((server.bind_ip, server.settings.port), timeout=3)
+            for _ in range(4)
+        ]
+        try:
+            # Wait until the server has actually taken all four, otherwise this
+            # would pass simply by asserting before the accept loop got round to
+            # them — which is exactly the regression it is meant to catch.
+            wait_for(lambda: server.handshakes_in_flight == 4)
+            assert all(not s.reserved for s in server.slots.sessions)
+            with Client(server).connect() as client:
+                assert client.slot == 0
+        finally:
+            for sock in silent:
+                sock.close()
+
+    def test_handshakes_in_flight_are_capped(self, server, monkeypatch):
+        """And the refusal is SERVER_FULL, never RATE_LIMITED.
+
+        The phone treats RATE_LIMITED as permanent and stops reconnecting, so
+        answering a transient queue overflow with it would let a burst of
+        connections lock an innocent phone out until the user intervened.
+        """
+        # The gate is built once, in __init__, so shrink the real thing.
+        server._handshake_capacity = 2
+        server._handshake_gate = threading.Semaphore(2)
+        silent = [
+            socket.create_connection((server.bind_ip, server.settings.port), timeout=3)
+            for _ in range(2)
+        ]
+        try:
+            wait_for(lambda: server.handshakes_in_flight == 2)
+            with Client(server) as extra:
+                assert extra.read_message() == P.encode_reject(RejectReason.SERVER_FULL)
+        finally:
+            for sock in silent:
+                sock.close()
+
+    def test_a_trickling_peer_cannot_stall_the_handshake_forever(self, server, monkeypatch):
+        """The socket timeout is per-recv and restarts on every byte.
+
+        A peer sending one byte at a time under that interval never times out, so
+        it could hold a place in the handshake queue indefinitely and never be
+        counted as silent either — the cap and the counter both became decorative.
+        The bound has to cover the whole exchange.
+        """
+        monkeypatch.setattr(server_module, "HANDSHAKE_TIMEOUT", 0.6)
+        sock = socket.create_connection((server.bind_ip, server.settings.port), timeout=5)
+        sock.settimeout(5)
+        payload = Hello(
+            P.PROTOCOL_VERSION, DeviceType.XBOX360, server.settings.token, "Drip"
+        ).encode()
+
+        def drip() -> None:
+            # One byte every 0.2 s: always inside the per-recv window, never
+            # inside a deadline for the whole handshake. Sending the lot takes
+            # far longer than HANDSHAKE_TIMEOUT.
+            for byte in payload:
+                try:
+                    sock.sendall(bytes([byte]))
+                except OSError:
+                    return
+                time.sleep(0.2)
+
+        sender = threading.Thread(target=drip, daemon=True)
+        sender.start()
+        try:
+            # The server must give up *while the peer is still dripping*. Waiting
+            # for the whole drip would pass without a deadline too — the bytes do
+            # eventually all arrive — so the margin is what makes this a test.
+            assert 0.2 * len(payload) > 4.0, "the drip must outlast the deadline"
+            wait_for(lambda: server.handshakes_in_flight == 0, timeout=2.0)
+        finally:
+            sock.close()
+            sender.join(timeout=2)
+
+    def test_the_queue_place_is_given_back(self, server):
+        """A settled connection must not keep one — neither a served client...
+
+        ...nor a refused one, which used to hold its place for the whole polite
+        drain and so could crowd out real phones with slow refusals.
+        """
+        with Client(server, token="wrong") as refused:
+            refused.hello()
+        wait_for(lambda: server.handshakes_in_flight == 0)
+
+        with Client(server).connect():
+            wait_for(lambda: server.handshakes_in_flight == 0)
+
+    def test_connect_then_close_is_not_a_failed_attempt(self, server):
+        """Port scans and health checks look exactly like this.
+
+        Counting them would let any such probe from an address block a phone
+        sharing it for a minute.
+        """
+        for _ in range(6):
+            sock = socket.create_connection((server.bind_ip, server.settings.port), timeout=3)
+            sock.close()
+        # The failures, if any were being counted, are recorded on the client
+        # threads. Asserting before those have run would let this pass against
+        # the very code it exists to reject.
+        wait_for(lambda: server.handshakes_in_flight == 0)
+        with Client(server).connect() as client:
+            assert client.slot == 0
+
+    def _go_silent(self, server, times: int) -> None:
+        """Open ``times`` connections that say nothing until the server gives up."""
+        for _ in range(times):
+            sock = socket.create_connection((server.bind_ip, server.settings.port), timeout=3)
+            sock.settimeout(3)
+            try:
+                sock.recv(16)   # blocks until the server gives up on the handshake
+            except OSError:
+                pass
+            sock.close()
+
+    def test_silence_is_rate_limited_separately(self, server, monkeypatch):
+        """Repeated silence is still abuse, and eventually blocked.
+
+        With SERVER_FULL, not RATE_LIMITED: the client treats the latter as a
+        final verdict and stops reconnecting, so answering silence with it would
+        give back exactly the permanent lockout the separate counter exists to
+        avoid — a slow network would still cost the phone its connection.
+        """
+        # The real 5 s handshake window would make this test take 25 s; the
+        # server reads the constant per connection, so shrinking it is enough.
+        monkeypatch.setattr(server_module, "HANDSHAKE_TIMEOUT", 0.1)
+        server._silent.max_attempts = 3
+        self._go_silent(server, 3)
+        with Client(server) as blocked:
+            assert blocked.read_message() == P.encode_reject(RejectReason.SERVER_FULL)
+
+    def test_a_flaky_phone_is_not_locked_out_by_the_token_limit(self, server, monkeypatch):
+        """Wi-Fi dropping between connect and HELLO looks exactly like an attack.
+
+        The phone retries every three seconds and treats RATE_LIMITED as final,
+        so counting silence on the same five-strike budget as a wrong token would
+        let a bad minute of Wi-Fi lock a phone out of its own PC for good.
+        """
+        monkeypatch.setattr(server_module, "HANDSHAKE_TIMEOUT", 0.1)
+        self._go_silent(server, 6)
+        with Client(server).connect() as client:
+            assert client.slot == 0
 
     def test_successful_handshake_clears_the_failure_count(self, server):
         for _ in range(3):
@@ -342,14 +560,78 @@ class TestDesktopControl:
         client.close()
         wait_for(lambda: desktop_backend.keys.get("space") is False)
 
+    def test_moving_the_desktop_lock_releases_a_held_key(self, server, desktop_backend):
+        """The slot losing the lock can no longer send a release of its own.
+
+        Its release path runs through the same gate that just shut, so unless the
+        server lets go here the key stays physically down until a restart.
+        """
+        server.settings.key_bindings = {"0": {"a": "space"}}
+        server.desktop.enabled = True
+        with Client(server).connect() as client:
+            client.send_input(buttons_low=int(Button.SOUTH))
+            wait_for(lambda: desktop_backend.keys.get("space") is True)
+
+            server.desktop.slot = 1
+            server.reset_desktop_state()
+
+            assert desktop_backend.keys.get("space") is False
+            assert server.slots.sessions[0].keys.release() == []
+
+    def test_moving_the_desktop_lock_releases_held_mouse_buttons(self, server, desktop_backend):
+        """Gyro mouse mode holds buttons through a different path than key binds."""
+        server.desktop.enabled = True
+        with Client(server).connect() as client:
+            session = server.slots.sessions[0]
+            # right_trigger > 100 is "left mouse button down" in mouse mode.
+            client.send_input(flags=InputFlag.MOUSE_MODE, right_trigger=255)
+            wait_for(lambda: desktop_backend.mouse_buttons.get("left") is True)
+            wait_for(lambda: session.mouse_buttons_held != 0)
+
+            server.desktop.slot = 1
+            server.reset_desktop_state()
+
+            assert desktop_backend.mouse_buttons["left"] is False
+            assert session.mouse_buttons_held == 0
+
+    def test_disabling_desktop_control_releases_a_held_key(self, server, desktop_backend):
+        server.settings.key_bindings = {"0": {"a": "space"}}
+        server.desktop.enabled = True
+        with Client(server).connect() as client:
+            client.send_input(buttons_low=int(Button.SOUTH))
+            wait_for(lambda: desktop_backend.keys.get("space") is True)
+
+            server.desktop.enabled = False
+            server.reset_desktop_state()
+
+            assert desktop_backend.keys.get("space") is False
+
+    def test_leaving_mouse_mode_recentres_the_gyro(self, server, desktop_backend):
+        """A bound button still held on the way out must not keep a stale centre.
+
+        The reset used to live in the branch that only runs when no bound button
+        changed the frame, so holding one across the transition preserved the old
+        centre and the cursor jumped on the next entry into mouse mode.
+        """
+        server.settings.key_bindings = {"0": {"a": "space"}}
+        server.desktop.enabled = True
+        with Client(server).connect() as client:
+            session = server.slots.sessions[0]
+            client.send_input(roll=1000, flags=InputFlag.MOUSE_MODE)
+            wait_for(lambda: session.gyro_centre == (1000, 0))
+
+            # Out of mouse mode, holding the bound button.
+            client.send_input(roll=1000, buttons_low=int(Button.SOUTH))
+            wait_for(lambda: session.gyro_centre is None)
+
 
 class TestLifecycle:
     def test_snapshot_shape(self, server):
         snapshot = server.snapshot()
         assert snapshot["running"] is True
-        assert snapshot["capacity"] == 4
+        assert snapshot["capacity"] == MAX_PLAYERS
         assert snapshot["connected"] == 0
-        assert len(snapshot["players"]) == 4
+        assert len(snapshot["players"]) == MAX_PLAYERS
         assert snapshot["name"] == "test-pc"
 
     def test_disconnect_releases_the_pad(self, server):

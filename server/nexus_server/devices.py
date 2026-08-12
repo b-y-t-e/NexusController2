@@ -56,6 +56,18 @@ class VirtualPad(abc.ABC):
     def close(self) -> None:
         """Release the underlying device. Idempotent."""
 
+    @property
+    def user_index(self) -> int | None:
+        """The XInput player number Windows gave this pad, or ``None``.
+
+        Our slot numbers and the game's player numbers are two different things:
+        a phone in slot 3 can be player 1 in the game, because XInput hands out
+        its four places in the order devices appear and shares them with any
+        physical pad already plugged in. A DS4 is a HID device and has no XInput
+        number at all.
+        """
+        return None
+
 
 # --- shared translation helpers ---------------------------------------------
 
@@ -157,6 +169,41 @@ class Xbox360Pad(_VGamepadPad):
         self.features = Feature.RUMBLE
         self._buttons = [(bit, getattr(xusb_button, name)) for bit, name in self._BUTTON_MAP]
         self._high = [(bit, getattr(xusb_button, name)) for bit, name in self._HIGH_MAP]
+        self._user_index: int | None = None
+
+    @property
+    def user_index(self) -> int | None:
+        """Ask ViGEm which XInput place this pad was given.
+
+        Windows assigns it a moment after the device attaches, so the first calls
+        can come back empty; the answer is cached once it arrives because it does
+        not change for the life of the target.
+        """
+        if self._user_index is not None:
+            return self._user_index
+        with self._lock:
+            gamepad = self._gamepad
+            if self._closed or gamepad is None:
+                return None
+            try:
+                import ctypes  # noqa: PLC0415 - only needed on the real backend
+                from vgamepad.win import vigem_client  # noqa: PLC0415
+
+                index = ctypes.c_ulong(0)
+                # pointer(), not byref(): the DLL takes both, and a real pointer
+                # is something a test double can write through.
+                result = vigem_client.vigem_target_x360_get_user_index(
+                    gamepad._busp, gamepad._devicep, ctypes.pointer(index)  # noqa: SLF001
+                )
+            except Exception:  # noqa: BLE001 - a missing export must not break the UI
+                log.debug("XInput user index unavailable", exc_info=True)
+                return None
+            # VIGEM_ERROR_NONE. Anything else means "not assigned yet", which is
+            # a normal answer in the first moments after the device appears.
+            if (result & 0xFFFFFFFF) != 0x20000000:
+                return None
+            self._user_index = int(index.value)
+            return self._user_index
 
     def _apply_locked(self, state: InputState) -> None:
         gp = self._gamepad

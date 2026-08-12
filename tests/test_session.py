@@ -26,6 +26,22 @@ class TestSlotAllocator:
         allocator.acquire()
         assert allocator.acquire() is None
 
+    def test_has_free_tracks_reservations(self):
+        """The accept loop's early "don't even bother" check.
+
+        It is only a hint — :meth:`acquire` is what actually decides — but a
+        wrong answer either turns good clients away or lets the queue fill up
+        with connections that can never be served.
+        """
+        allocator = SlotAllocator(2)
+        assert allocator.has_free() is True
+        first = allocator.acquire()
+        assert allocator.has_free() is True
+        allocator.acquire()
+        assert allocator.has_free() is False
+        allocator.release(first)
+        assert allocator.has_free() is True
+
     def test_released_slot_is_reused(self):
         allocator = SlotAllocator(2)
         first = allocator.acquire()
@@ -149,6 +165,23 @@ class TestPlayerSession:
         assert snap["slot"] == 2
         assert snap["device_label"] == "Buzz (PS3)"
         assert set(snap["visuals"]) >= {"lx", "ly", "rx", "ry", "lt", "rt"}
+
+    def test_snapshot_distinguishes_reserved_from_connected(self):
+        """The dashboard has to be able to say "connecting", not "free".
+
+        Between a valid HELLO and the pad being created the slot is spoken for
+        but not yet live. Reporting only ``connected`` made that moment look like
+        an empty slot — the one reading that sends someone hunting for a phone
+        that is in fact arriving.
+        """
+        session = PlayerSession(0)
+        session.reserved = True
+        snap = session.snapshot()
+        assert snap["reserved"] is True
+        assert snap["connected"] is False
+
+    def test_snapshot_reports_no_xinput_number_without_a_pad(self):
+        assert PlayerSession(0).snapshot()["xinput_index"] is None
 
 
 class TestVisuals:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import abc
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -252,14 +253,45 @@ class KeyBindingEngine:
     def __init__(self, bindings: dict[str, str] | None = None) -> None:
         self._bindings: dict[str, str] = {}
         self._held: set[str] = set()
+        # update() runs on the client thread while release() and set_bindings()
+        # can be called from the dashboard thread, so each of them has to be
+        # atomic with respect to the others.
+        #
+        # This does NOT order them: an update() that starts after release() will
+        # still record a press. What stops that press from reaching the keyboard
+        # is the caller — the gate is shut before the reset, see
+        # ControllerServer.reset_desktop_state. Do not weaken that order on the
+        # strength of this lock.
+        self._lock = threading.Lock()
         self.set_bindings(bindings or {})
 
-    def set_bindings(self, bindings: dict[str, str]) -> None:
-        self._bindings = {
+    def set_bindings(self, bindings: dict[str, str]) -> list[tuple[str, bool]]:
+        """Replace the bindings, returning the keys that must now be released.
+
+        Rebinding a button that is *held* used to strand the old key: the held
+        set is keyed by button name, so after the swap the release looked up the
+        new key, and nothing ever let go of the old one.
+        """
+        cleaned = {
             name.lower(): key
             for name, key in bindings.items()
             if name.lower() in BUTTON_BITS and isinstance(key, str) and key
         }
+        with self._lock:
+            kept = {name for name in self._held if cleaned.get(name) == self._bindings.get(name)}
+            # Two buttons can share a key. Releasing it because one of them was
+            # rebound would let go of a key the other is still holding down, so
+            # only keys nothing still holds are stranded.
+            still_held = {self._bindings[name] for name in kept if name in self._bindings}
+            stranded = []
+            for name in sorted(self._held - kept):
+                key = self._bindings.get(name)
+                if key is not None and key not in still_held:
+                    stranded.append((key, False))
+                    still_held.add(key)
+            self._held = kept
+            self._bindings = cleaned
+        return stranded
 
     @property
     def bindings(self) -> dict[str, str]:
@@ -272,23 +304,29 @@ class KeyBindingEngine:
     def update(self, buttons_low: int, buttons_high: int) -> list[tuple[str, bool]]:
         """Return the ``(key, pressed)`` transitions caused by this frame."""
         events: list[tuple[str, bool]] = []
-        for name, key in self._bindings.items():
-            which, bit = BUTTON_BITS[name]
-            source = buttons_low if which == "low" else buttons_high
-            is_down = bool(source & bit)
-            was_down = name in self._held
-            if is_down and not was_down:
-                self._held.add(name)
-                events.append((key, True))
-            elif not is_down and was_down:
-                self._held.discard(name)
-                events.append((key, False))
+        with self._lock:
+            for name, key in self._bindings.items():
+                which, bit = BUTTON_BITS[name]
+                source = buttons_low if which == "low" else buttons_high
+                is_down = bool(source & bit)
+                was_down = name in self._held
+                if is_down and not was_down:
+                    self._held.add(name)
+                    events.append((key, True))
+                elif not is_down and was_down:
+                    self._held.discard(name)
+                    events.append((key, False))
         return events
 
     def release(self) -> list[tuple[str, bool]]:
         """Release everything this engine is holding, e.g. on disconnect."""
-        events = [(self._bindings[name], False) for name in sorted(self._held) if name in self._bindings]
-        self._held.clear()
+        with self._lock:
+            events = [
+                (self._bindings[name], False)
+                for name in sorted(self._held)
+                if name in self._bindings
+            ]
+            self._held.clear()
         return events
 
     def masked_buttons(self, buttons_low: int, buttons_high: int) -> tuple[int, int]:

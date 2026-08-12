@@ -34,7 +34,8 @@ class Component:
     label: str
     #: Nominal size as a fraction of screen *height*.
     size: float
-    #: ``"round"`` renders as a circle, ``"pad"`` as a rounded square.
+    #: ``"round"`` a circle, ``"pad"`` a rounded square, ``"bar"`` an upright
+    #: rounded bar three times as tall as it is wide — the Buzz answer button.
     shape: str = "round"
 
 
@@ -54,10 +55,10 @@ GAMEPAD_COMPONENTS: Final[tuple[Component, ...]] = (
 
 BUZZ_COMPONENTS: Final[tuple[Component, ...]] = (
     Component("BUZZ_RED", "Buzz", 0.38),
-    Component("BUZZ_BLUE", "Blue", 0.16),
-    Component("BUZZ_ORANGE", "Orange", 0.16),
-    Component("BUZZ_GREEN", "Green", 0.16),
-    Component("BUZZ_YELLOW", "Yellow", 0.16),
+    Component("BUZZ_BLUE", "Blue", 0.44, "bar"),
+    Component("BUZZ_ORANGE", "Orange", 0.44, "bar"),
+    Component("BUZZ_GREEN", "Green", 0.44, "bar"),
+    Component("BUZZ_YELLOW", "Yellow", 0.44, "bar"),
 )
 
 
@@ -87,12 +88,19 @@ DEFAULT_GAMEPAD_LAYOUT: Final[dict[str, dict[str, float]]] = {
     "PS":      {"x": 0.50, "y": 0.42},
 }
 
+#: The dome on the left, the four answer bars standing side by side beside it.
+#: Mirrors LayoutStore.BUZZ_DEFAULTS.
+#:
+#: The buzzer stacks its bars flat, one above the other. On a screen that is wide
+#: and short that arrangement wastes the dimension there is least of: a flat bar
+#: can only be as long as a quarter of the width. Stood upright the bars are as
+#: long as the screen is tall, and four of them still fit in a row.
 DEFAULT_BUZZ_LAYOUT: Final[dict[str, dict[str, float]]] = {
-    "BUZZ_RED":    {"x": 0.50, "y": 0.30},
-    "BUZZ_BLUE":   {"x": 0.20, "y": 0.74},
-    "BUZZ_ORANGE": {"x": 0.40, "y": 0.74},
-    "BUZZ_GREEN":  {"x": 0.60, "y": 0.74},
-    "BUZZ_YELLOW": {"x": 0.80, "y": 0.74},
+    "BUZZ_RED":    {"x": 0.19, "y": 0.52, "s": 0.90},
+    "BUZZ_BLUE":   {"x": 0.44, "y": 0.50, "s": 1.25},
+    "BUZZ_ORANGE": {"x": 0.59, "y": 0.50, "s": 1.25},
+    "BUZZ_GREEN":  {"x": 0.74, "y": 0.50, "s": 1.25},
+    "BUZZ_YELLOW": {"x": 0.89, "y": 0.50, "s": 1.25},
 }
 
 DEFAULT_SETTINGS: Final[dict[str, Any]] = {

@@ -35,8 +35,15 @@ class TestComponents:
         assert not ids & {"L_STICK", "R_STICK", "L2", "R2", "DPAD"}
 
     def test_the_buzzer_is_the_biggest_control(self):
+        """By area, which is what a thumb cares about.
+
+        Not by height any more: the answer bars stand upright, so they are the
+        *longer* controls while being a third as wide.
+        """
         sizes = {c.id: c.size for c in components_for(DeviceType.BUZZ)}
-        assert sizes["BUZZ_RED"] == max(sizes.values())
+        dome = 3.14159 * (sizes["BUZZ_RED"] / 2) ** 2
+        bar = max(sizes[i] for i in sizes if i != "BUZZ_RED") ** 2 / 3
+        assert dome > bar
 
     def test_every_default_layout_entry_is_a_known_component(self):
         for device_type in DeviceType:
@@ -264,3 +271,89 @@ class TestScreenIndependence:
             key = (round(placement["x"], 3), round(placement["y"], 3))
             assert key not in seen
             seen.add(key)
+
+
+class TestBuzzDefaultLayout:
+    """The hardware's shapes and order, arranged for a wide, short screen."""
+
+    def _sizes(self):
+        return {c.id: c.size for c in components_for(DeviceType.BUZZ)}
+
+    def test_the_answer_buttons_are_bars_not_squares(self):
+        """The real buzzer's answers are wide, flat bars, and the PC preview has
+        to draw what the phone draws."""
+        shapes = {c.id: c.shape for c in components_for(DeviceType.BUZZ)}
+        assert shapes["BUZZ_RED"] == "round"
+        for name in ("BUZZ_BLUE", "BUZZ_ORANGE", "BUZZ_GREEN", "BUZZ_YELLOW"):
+            assert shapes[name] == "bar"
+
+    def test_the_answers_stand_in_a_row_in_their_physical_order(self):
+        layout = default_layout(DeviceType.BUZZ)
+        answers = [n for n in layout if n != "BUZZ_RED"]
+        assert {layout[n]["y"] for n in answers} == {0.50}, "the answers form one row"
+        assert sorted(answers, key=lambda n: layout[n]["x"]) == [
+            "BUZZ_BLUE", "BUZZ_ORANGE", "BUZZ_GREEN", "BUZZ_YELLOW"
+        ]
+
+    def test_the_dome_sits_beside_the_stack_not_above_it(self):
+        layout = default_layout(DeviceType.BUZZ)
+        assert layout["BUZZ_RED"]["x"] < layout["BUZZ_BLUE"]["x"]
+
+    def test_nothing_runs_off_the_top_or_bottom(self):
+        sizes = self._sizes()
+        for name, placement in default_layout(DeviceType.BUZZ).items():
+            half = sizes[name] * placement["s"] / 2
+            assert placement["y"] - half >= 0.0, f"{name} runs off the top"
+            assert placement["y"] + half <= 1.0, f"{name} runs off the bottom"
+
+    def test_the_row_does_not_overlap_itself(self):
+        sizes = self._sizes()
+        layout = default_layout(DeviceType.BUZZ)
+        answers = sorted(
+            (n for n in layout if n != "BUZZ_RED"), key=lambda n: layout[n]["x"]
+        )
+        for aspect in self.ASPECTS:
+            for left, right in zip(answers, answers[1:]):
+                gap = layout[right]["x"] - layout[left]["x"]
+                needed = (
+                    sizes[left] * layout[left]["s"] * self.BAR_ASPECT
+                    + sizes[right] * layout[right]["s"] * self.BAR_ASPECT
+                ) / 2 / aspect
+                assert gap >= needed, f"{left} and {right} overlap at {aspect:.2f}"
+
+    #: Landscape shapes the layout has to survive: 4:3 tablet to 21:9 phone.
+    ASPECTS = (4 / 3, 16 / 9, 21 / 9)
+    #: An upright answer bar is a third as wide as it is tall — see pad.js.
+    BAR_ASPECT = 1 / 3
+
+    def test_it_fits_every_landscape_shape(self):
+        """Sizes are fractions of height, so how wide a control is depends on the
+        screen. A 4:3 tablet is the narrowest case and used to clip the dome."""
+        sizes = self._sizes()
+        layout = default_layout(DeviceType.BUZZ)
+        for aspect in self.ASPECTS:
+            for name, placement in layout.items():
+                width = sizes[name] * placement["s"]
+                if name != "BUZZ_RED":
+                    width *= self.BAR_ASPECT  # an upright bar is a third as wide as tall
+                half = width / aspect / 2
+                assert placement["x"] - half >= 0.0, f"{name} clips left at {aspect:.2f}"
+                assert placement["x"] + half <= 1.0, f"{name} clips right at {aspect:.2f}"
+
+    def test_the_dome_never_reaches_the_stack(self):
+        sizes = self._sizes()
+        layout = default_layout(DeviceType.BUZZ)
+        for aspect in self.ASPECTS:
+            dome = sizes["BUZZ_RED"] * layout["BUZZ_RED"]["s"] / aspect / 2
+            bar = sizes["BUZZ_BLUE"] * layout["BUZZ_BLUE"]["s"] * self.BAR_ASPECT / aspect / 2
+            assert (
+                layout["BUZZ_RED"]["x"] + dome <= layout["BUZZ_BLUE"]["x"] - bar
+            ), f"the dome overlaps the bars at {aspect:.2f}"
+
+    def test_the_controls_are_worth_hitting(self):
+        """The point of the arrangement: room to be big, not a tenth of the screen."""
+        sizes = self._sizes()
+        layout = default_layout(DeviceType.BUZZ)
+        assert sizes["BUZZ_RED"] * layout["BUZZ_RED"]["s"] >= 0.33
+        for name in ("BUZZ_BLUE", "BUZZ_ORANGE", "BUZZ_GREEN", "BUZZ_YELLOW"):
+            assert sizes[name] * layout[name]["s"] >= 0.45
