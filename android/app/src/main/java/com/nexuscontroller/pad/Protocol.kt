@@ -33,6 +33,18 @@ enum class ControllerType(val wire: Int, val label: String) {
     /** PlayStation faces: crosses and circles rather than letters. */
     val isPlayStation: Boolean get() = this == DUALSHOCK4 || this == DUALSHOCK3
 
+    /**
+     * The face to wear after a `SET_CONFIG` names [pushed] (PROTOCOL.md §10).
+     *
+     * `type` in a configuration document names a *device*, not a face, and it is
+     * always written as the wire name — so a document saying `DUALSHOCK4` cannot
+     * be telling a phone wearing the DualShock 3 face to change: the sender had
+     * no way to say otherwise. Only a different wire type is a real request, and
+     * only that is worth the reconnect it costs.
+     */
+    fun faceFor(pushed: ControllerType?): ControllerType =
+        if (pushed == null || pushed.wire == wire) this else pushed
+
     companion object {
         /**
          * The order to *offer* them in, which is not the order they are declared
@@ -308,7 +320,7 @@ object Protocol {
      * Returns null for anything that is not a well-formed v2 response.
      */
     fun parseDiscoveryResponse(raw: String?): DiscoveredServer? {
-        val line = raw?.trim()?.trimEnd(' ') ?: return null
+        val line = raw?.trim()?.trimEnd('\u0000') ?: return null
         val parts = line.split('|')
         if (parts.size != 4) return null
         if (parts[0] != DISCOVERY_RESPONSE_PREFIX) return null

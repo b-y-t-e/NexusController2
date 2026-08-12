@@ -10,7 +10,9 @@
   moving a screen around does not turn every id into a lie.
 -->
 <resources>
-    <string name="app_name">Nexus Controller</string>
+    <!-- The product name, the same in every language: not something to translate,
+         and lint is right to ask why "pl" is missing it until we say so. -->
+    <string name="app_name" translatable="false">Nexus Controller</string>
 
     <!-- First run -->
     <string name="first_run_title">Choose your pad</string>

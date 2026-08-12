@@ -48,6 +48,48 @@ class ControllerTypeTest {
     }
 
     @Test
+    fun `a push cannot take away the DualShock 3 face`() {
+        """The PC writes wire names, so DUALSHOCK4 is what a DS3 phone sees.
+
+        Its designer does not even offer the DS3 face, and a document naming
+        DUALSHOCK4 is what a DS3 phone gets told about *itself* every time a
+        layout is pushed. Reading that as "become a DualShock 4" would undo the
+        user's choice behind their back and redial the session — which now costs
+        the phone its player slot.
+        """
+        assertEquals(
+            ControllerType.DUALSHOCK3,
+            ControllerType.DUALSHOCK3.faceFor(ControllerType.DUALSHOCK4)
+        )
+        assertEquals(
+            ControllerType.DUALSHOCK3,
+            ControllerType.DUALSHOCK3.faceFor(ControllerType.DUALSHOCK3)
+        )
+    }
+
+    @Test
+    fun `a push with no type at all changes nothing`() {
+        ControllerType.entries.forEach { assertEquals(it, it.faceFor(null)) }
+    }
+
+    @Test
+    fun `a push of a genuinely different device is obeyed`() {
+        """A different *wire* type is a real request, and worth the reconnect."""
+        assertEquals(
+            ControllerType.BUZZ,
+            ControllerType.DUALSHOCK3.faceFor(ControllerType.BUZZ)
+        )
+        assertEquals(
+            ControllerType.DUALSHOCK4,
+            ControllerType.XBOX360.faceFor(ControllerType.DUALSHOCK4)
+        )
+        assertEquals(
+            ControllerType.XBOX360,
+            ControllerType.BUZZ.faceFor(ControllerType.XBOX360)
+        )
+    }
+
+    @Test
     fun `storage lookup falls back to xbox`() {
         assertEquals(ControllerType.BUZZ, ControllerType.fromStorage("BUZZ"))
         assertEquals(ControllerType.DUALSHOCK4, ControllerType.fromStorage("dualshock4"))

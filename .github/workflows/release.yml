@@ -54,16 +54,34 @@ jobs:
         working-directory: android
         run: ./gradlew --no-daemon testModernDebugUnitTest
 
+      # Both flavours, because they are the same code against very different
+      # minimum API levels and only lint can tell them apart: an API 26 call is
+      # invisible to the compiler, to the unit tests and to a phone running 13 —
+      # and a NoClassDefFoundError on an older one, which no catch block sees.
+      - name: Lint
+        working-directory: android
+        run: ./gradlew --no-daemon lintModernDebug lintLegacyDebug
+
       - name: Build the APKs
         working-directory: android
         run: ./gradlew --no-daemon assembleModernDebug assembleLegacyDebug
 
+      # Staged flat, and named here rather than in the publish job. With two
+      # explicit paths, upload-artifact roots the artifact at their least common
+      # ancestor — apk/ — so the files arrive as modern/debug/app-modern-debug.apk
+      # and the publish job's cp missed them, failing every tagged build.
+      - name: Stage the APKs
+        run: |
+          mkdir -p staging
+          cp android/app/build/outputs/apk/modern/debug/app-modern-debug.apk \
+             staging/NexusController.apk
+          cp android/app/build/outputs/apk/legacy/debug/app-legacy-debug.apk \
+             staging/NexusController-legacy.apk
+
       - uses: actions/upload-artifact@v4
         with:
           name: NexusController-apk
-          path: |
-            android/app/build/outputs/apk/modern/debug/app-modern-debug.apk
-            android/app/build/outputs/apk/legacy/debug/app-legacy-debug.apk
+          path: staging/
 
   publish:
     name: Publish release
@@ -79,10 +97,14 @@ jobs:
         run: |
           mkdir -p release
           cp artifacts/NexusController-windows/NexusController.exe release/
-          cp artifacts/NexusController-windows/SHA256SUMS.txt release/ || true
-          cp artifacts/NexusController-apk/app-modern-debug.apk release/NexusController.apk
-          cp artifacts/NexusController-apk/app-legacy-debug.apk release/NexusController-legacy.apk
-          (cd release && sha256sum * > SHA256SUMS.txt)
+          cp artifacts/NexusController-apk/NexusController.apk release/
+          cp artifacts/NexusController-apk/NexusController-legacy.apk release/
+          # Written last and never fed to itself: `sha256sum *` with the output
+          # file already in the directory truncates it first and then hashes the
+          # empty result, so the release shipped a checksum of nothing under its
+          # own name. The Windows job's partial list is not copied over for the
+          # same reason — this one covers every file that is actually released.
+          (cd release && sha256sum NexusController* > SHA256SUMS.txt)
           ls -la release
 
       - uses: softprops/action-gh-release@v2

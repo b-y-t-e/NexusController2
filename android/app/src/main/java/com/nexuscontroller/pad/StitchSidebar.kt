@@ -136,10 +136,6 @@ fun StitchSidebar(
                     Box(modifier = Modifier.padding(horizontal = 24.dp).fillMaxWidth().height(1.dp).background(borderColor))
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Box(modifier = Modifier.padding(horizontal = 24.dp).fillMaxWidth().height(1.dp).background(borderColor))
-                    Spacer(modifier = Modifier.height(16.dp))
-
                     SectionLabel(stringResource(R.string.section_system), contentColor)
                     
                     SystemItem(stringResource(R.string.action_settings), Icons.Rounded.Settings, contentColor) {

@@ -53,16 +53,38 @@ class Haptics(context: Context) {
         }
     }
 
+    /**
+     * Three branches, because three different APIs are involved and getting the
+     * boundary wrong is a crash rather than a missing buzz: a class that does not
+     * exist yet throws [NoClassDefFoundError], which is an `Error` and so sails
+     * straight through `catch (e: Exception)`.
+     *
+     * * [VibrationAttributes] arrived in **API 33**, not 31 — guarding it with
+     *   `S` killed the app on every Android 12 and 12L phone.
+     * * [VibrationEffect] arrived in **API 26**, and the legacy flavour installs
+     *   back to 21, where the only vibrate() that exists takes a duration.
+     */
     private fun play(durationMs: Long, amplitude: Int) {
         val v = vibrator ?: return
         if (!available) return
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                // USAGE_MEDIA so it still fires when system touch feedback is off.
-                val attrs = VibrationAttributes.Builder().setUsage(VibrationAttributes.USAGE_MEDIA).build()
-                v.vibrate(VibrationEffect.createOneShot(durationMs, amplitude), attrs)
-            } else {
-                v.vibrate(VibrationEffect.createOneShot(durationMs, amplitude))
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
+                    // USAGE_MEDIA so it still fires when system touch feedback is off.
+                    val attrs = VibrationAttributes.Builder()
+                        .setUsage(VibrationAttributes.USAGE_MEDIA)
+                        .build()
+                    v.vibrate(VibrationEffect.createOneShot(durationMs, amplitude), attrs)
+                }
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ->
+                    v.vibrate(VibrationEffect.createOneShot(durationMs, amplitude))
+                else -> {
+                    // No amplitude control before Oreo: the phone buzzes at whatever
+                    // strength it has, for as long as we ask. Length is the only
+                    // dial left, so the strength setting simply has less to say.
+                    @Suppress("DEPRECATION")
+                    v.vibrate(durationMs)
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "vibrate failed", e)

@@ -1,5 +1,6 @@
 package com.nexuscontroller.pad
 
+import android.os.SystemClock
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -55,7 +56,13 @@ import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** How often the pad's own state is examined. Sending is driven by change. */
+/**
+ * How long the input loop waits between looks at the pad's own state.
+ *
+ * A floor, not a promise: the loop runs on the main thread, so a look happens
+ * once the frame in front of it has been drawn. It bounds the delay a press can
+ * suffer *here* — what it cannot do is make the thread free.
+ */
 private const val INPUT_POLL_MS = 4L
 
 /** A resend even when nothing moved, so a lost packet cannot strand the pad. */
@@ -206,10 +213,16 @@ fun PSControllerScreen(
      * everything else, for every button on the pad. It also sent 66 identical
      * frames a second while nothing was happening.
      *
-     * Polling at 4 ms and writing only on a change inverts both: a press leaves
-     * within a few milliseconds, and a still pad sends nothing but a slow
-     * heartbeat. The channel to the socket is conflated, so even a fast burst
-     * cannot back up — the newest state wins.
+     * Looking every [INPUT_POLL_MS] and writing only on a change inverts both: a
+     * press leaves as soon as the main thread comes back to this loop, and a
+     * still pad sends nothing but the [IDLE_HEARTBEAT_MS] heartbeat. The channel
+     * into the socket writer is `Channel.CONFLATED`, so even a fast burst cannot
+     * back up — the newest state wins and the older ones are dropped unsent.
+     *
+     * Timed on [SystemClock.elapsedRealtime]: the wall clock can step when the
+     * network corrects it, and a step backwards would hold the heartbeat for as
+     * long as the correction — which the server would read as a phone that has
+     * gone, and hand its slot to somebody else.
      */
     LaunchedEffect(Unit) {
         var lastSent: Triple<Int, Int, List<Int>>? = null
@@ -236,7 +249,7 @@ fun PSControllerScreen(
             }
 
             val axes = listOf(lx, ly, rightX, rightY, leftTrigger, rightTrigger)
-            val now = System.currentTimeMillis()
+            val now = SystemClock.elapsedRealtime()
             val frame = Triple(bl, bh, axes)
             // The heartbeat exists so a server that missed a packet, or a pad
             // left untouched across a reconnect, cannot sit on a stale state.

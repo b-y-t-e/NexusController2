@@ -251,7 +251,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
              * can confirm what actually landed.
              */
             fun applyPushedConfig(doc: ConfigDocument) {
-                val newType = doc.type ?: controllerType
+                // A face is not a device. DUALSHOCK3 and DUALSHOCK4 share one wire
+                // type, so a document saying DUALSHOCK4 carries no opinion about
+                // which of the two the phone should wear — the PC cannot express
+                // the difference and its designer does not even offer it. Treating
+                // it as a change would silently undo the user's choice of face and
+                // redial the connection for nothing, which now costs the session
+                // its slot as well.
+                val newType = controllerType.faceFor(doc.type)
                 val typeChanged = newType != controllerType
 
                 if (doc.layout != null) {
@@ -279,7 +286,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     layoutStore.save(configs, currentProfileName, controllerType)
                     controllerType = newType
                     layoutStore.setControllerType(newType)
-                    // The device type is announced in HELLO, so the session has to be redialled.
+                    // Only ever reached when the wire type really differs, so the
+                    // HELLO the server has on file is now wrong: redial.
                     networkController.disconnect()
                     if (target != null) networkController.connect(target, newType, deviceName)
                 }

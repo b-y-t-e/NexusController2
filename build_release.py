@@ -10,7 +10,7 @@ of them — so a local build produces the exact set of files a tag would.
 Two APKs are produced: ``NexusController.apk`` for Android 9 and newer, and
 ``NexusController-legacy.apk``, which installs back to Android 5.
 
-    --skip-tests     build without running the two test suites first
+    --skip-tests     build without running the test suites and Android lint
     --exe-only       Windows executable only, skip Android
     --apk-only       Android APK only, skip the executable
     --no-driver      do not bundle the ViGEmBus installer into the executable
@@ -81,6 +81,15 @@ def check_modules(python: str, needed: dict[str, str]) -> None:
         )
     except OSError as exc:
         raise StepFailed(f"cannot run {python}: {exc}") from exc
+    if result.returncode != 0:
+        # An empty stdout from a probe that crashed reads exactly like "nothing
+        # is missing", so the build would sail past the check and fail later,
+        # somewhere far less informative. Say what actually happened.
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise StepFailed(
+            f"{python} could not be asked what it has installed "
+            f"(exit {result.returncode}): {detail[-1] if detail else 'no output'}"
+        )
     missing = [name for name in result.stdout.strip().split(",") if name]
     if missing:
         sources = sorted({needed[name] for name in missing})
@@ -115,11 +124,28 @@ def test_server(python: str) -> None:
 
 
 def test_android() -> None:
-    # One flavour is enough: they are the same code, built against the same SDK.
+    # One flavour is enough for the unit tests: they are the same code, built
+    # against the same SDK. Lint is the opposite case — see below.
     run(
         [str(GRADLEW), "--no-daemon", "testModernDebugUnitTest"],
         cwd=ANDROID,
         what="Kotlin tests",
+    )
+
+
+def lint_android() -> None:
+    """Both flavours, because this is the only check that tells them apart.
+
+    ``modern`` starts at API 28 and ``legacy`` at 21, and a call to an API newer
+    than the minimum compiles cleanly, passes every unit test and works on the
+    phone in your hand. On an older one it throws ``NoClassDefFoundError`` —
+    an ``Error``, so the surrounding ``catch (e: Exception)`` never sees it and
+    the app simply dies. Lint is what knows the API level of every call.
+    """
+    run(
+        [str(GRADLEW), "--no-daemon", "lintModernDebug", "lintLegacyDebug"],
+        cwd=ANDROID,
+        what="Android lint (both flavours)",
     )
 
 
@@ -267,7 +293,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--skip-tests", action="store_true", help="do not run the test suites")
+    parser.add_argument("--skip-tests", action="store_true",
+                        help="do not run the test suites or Android lint")
     parser.add_argument("--no-driver", action="store_true", help="do not bundle ViGEmBus")
     parser.add_argument("--release-apk", action="store_true",
                         help="assembleRelease instead of assembleDebug (currently unsigned)")
@@ -294,6 +321,7 @@ def main(argv: list[str] | None = None) -> int:
                 test_server(python)
             if want_apk:
                 test_android()
+                lint_android()
 
         artefacts: list[tuple[Path, str]] = []
         if want_exe:

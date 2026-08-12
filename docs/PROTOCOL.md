@@ -302,9 +302,17 @@ same schema, so a document captured from one phone can be pushed to another.
 
 * `v` is the schema version; a peer that does not recognise it ignores the whole
   document rather than guessing.
-* `type` is the controller type name (`XBOX360`, `DUALSHOCK4`, `BUZZ`). Changing it
-  in a `SET_CONFIG` makes the client reconnect so the handshake announces the new
-  type.
+* `type` is the controller type name (`XBOX360`, `DUALSHOCK4`, `BUZZ`) — the three
+  the **wire** distinguishes. A `SET_CONFIG` that names a different one makes the
+  client reconnect, because the type is announced in the handshake.
+* **`type` names a device, not a face.** A client may offer several faces over one
+  wire type — the phone's `DUALSHOCK3` is a `DUALSHOCK4` here, since ViGEmBus has
+  no DS3 target — and it writes the *wire* name into the documents it sends. A
+  `SET_CONFIG` whose `type` has the same wire value as the client's current one is
+  therefore **not** a request to change device: the client keeps the face it is
+  wearing and does **not** reconnect. The sender could not have expressed the
+  difference, so it cannot have meant to overwrite it — and a needless reconnect
+  costs the client its player slot.
 * **`x` and `y` are fractions of the usable screen, `0.0`–`1.0`, and address the
   *centre* of the component.** They are deliberately *not* pixels: a layout authored
   on the PC has to land in the same place on any phone. Values outside the range are

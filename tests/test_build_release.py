@@ -8,6 +8,7 @@ successful build's output.
 """
 
 import hashlib
+import subprocess
 
 import pytest
 
@@ -181,3 +182,19 @@ class TestModuleCheck:
     def test_an_unusable_interpreter_is_reported(self):
         with pytest.raises(br.StepFailed):
             br.check_modules("no-such-python-anywhere", {"json": "stdlib"})
+
+    def test_a_probe_that_crashes_is_not_read_as_success(self, monkeypatch):
+        """An interpreter that ran but failed is not an interpreter that has everything.
+
+        The probe reports what is missing on stdout, so a crash — a broken venv,
+        an interpreter that cannot import its own stdlib — leaves stdout empty,
+        which reads exactly like "nothing is missing". The build then went on and
+        failed much later, somewhere that explained none of it.
+        """
+        def crashed(*args, **kwargs):
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="Fatal Python error")
+
+        monkeypatch.setattr(br.subprocess, "run", crashed)
+        with pytest.raises(br.StepFailed) as excinfo:
+            br.check_modules("python", {"json": "stdlib"})
+        assert "Fatal Python error" in str(excinfo.value)
