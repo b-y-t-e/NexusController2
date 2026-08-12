@@ -136,8 +136,18 @@ fun PSControllerScreen(
         }
     }
 
-    // Switching controller type must not leave a button stuck down.
-    LaunchedEffect(controllerType) {
+    // Leaving the pad must not leave a button stuck down — whether it is another
+    // controller type taking its place or another mode entirely.
+    //
+    // A button reports its release from `tryAwaitRelease()`, inside the gesture
+    // that is running while the finger is down. Switching to the trackpad takes
+    // the pad out of the composition and cancels that gesture, so the release
+    // never arrives and the frame keeps carrying the button. The pad state is
+    // suppressed while the cursor is being driven, so the game does not see it —
+    // but only for the one slot that holds the desktop lock, and only while
+    // desktop control is on at all. Everywhere else the game holds that button
+    // for as long as the phone stays on the trackpad.
+    LaunchedEffect(controllerType, currentMode) {
         pressedLow.clear()
         pressedHigh.clear()
         leftX = 127; leftY = 127; rightX = 127; rightY = 127
