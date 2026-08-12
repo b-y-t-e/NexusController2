@@ -555,6 +555,34 @@ class TestDesktopControl:
             client.send_raw(bytes([P.ClientOpcode.MOUSE, 0x00, 0x00, 0x00]))
             wait_for(lambda: desktop_backend.mouse_buttons.get("left") is False)
 
+    def test_a_selection_holds_the_button_across_the_whole_drag(
+        self, server, desktop_backend
+    ):
+        """The end-to-end shape of "tap and a half": press, travel, release.
+
+        The phone sends the button state with *every* mouse message, so a long
+        selection is a stream of MOUSE frames all carrying the same held button,
+        interleaved with the pad's own heartbeat. What matters here is that the
+        button is down for the whole journey and up exactly once at the end.
+        """
+        server.desktop.enabled = True
+        with Client(server).connect() as client:
+            client.send_raw(bytes([P.ClientOpcode.MOUSE, 0x00, 0x00, 0x01]))
+            wait_for(lambda: desktop_backend.mouse_buttons.get("left") is True)
+
+            for _ in range(20):
+                client.send_raw(bytes([P.ClientOpcode.MOUSE, 0x05, 0x02, 0x01]))
+                client.send_input(flags=int(InputFlag.MOUSE_MODE))
+            client.send_raw(bytes([P.ClientOpcode.PING]) + struct.pack(">I", 7))
+            client.read_message()
+
+            assert desktop_backend.mouse_buttons["left"] is True
+            travelled = sum(dx for dx, _ in desktop_backend.moves)
+            assert travelled == 100, "every step of the drag should have moved"
+
+            client.send_raw(bytes([P.ClientOpcode.MOUSE, 0x00, 0x00, 0x00]))
+            wait_for(lambda: desktop_backend.mouse_buttons.get("left") is False)
+
     def test_a_held_mouse_button_is_released_when_the_phone_goes_away(
         self, server, desktop_backend
     ):

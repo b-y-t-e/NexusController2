@@ -95,6 +95,10 @@
     <string name="settings_calibrate">USTAW ŚRODEK</string>
     <string name="settings_controls">Sterowanie</string>
     <string name="settings_trackpad">Gładzik</string>
+    <string name="settings_trackpad_buttons">Pasek przycisków</string>
+    <string name="settings_trackpad_buttons_hint">Lewy i prawy przycisk pod gładzikiem</string>
+    <string name="trackpad_button_left">LEWY</string>
+    <string name="trackpad_button_right">PRAWY</string>
     <string name="settings_touch_sensitivity">Czułość dotyku: %1$s</string>
     <string name="settings_reset">Przywróć domyślne</string>
     <string name="theme_dark">Ciemny</string>

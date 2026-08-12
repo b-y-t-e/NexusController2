@@ -92,6 +92,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             // On by default: Guide means "go home" to Windows, and the middle of
             // a pad is where a thumb passes.
             var guideHold by remember { mutableStateOf(prefs.getBoolean("guide_hold", true)) }
+            // Off by default: the gestures are always available, and the bar
+            // costs a strip of the pad. It exists for hands that never meet them.
+            var trackpadButtons by remember {
+                mutableStateOf(prefs.getBoolean("trackpad_buttons", false))
+            }
             var controllerType by remember { mutableStateOf(layoutStore.controllerType()) }
             var needsFirstRunChoice by remember { mutableStateOf(!layoutStore.hasChosenControllerType()) }
 
@@ -332,6 +337,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             PSControllerScreen(
                 isConnected = isConnected,
                 guideHold = guideHold,
+                trackpadButtons = trackpadButtons,
                 showConnectionDialog = showConnectionDialog,
                 currentMode = currentMode,
                 controllerType = controllerType,
@@ -443,6 +449,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     gyroSensitivity = gyroSensitivity,
                     touchVibration = touchVibration,
                     guideHold = guideHold,
+                    trackpadButtons = trackpadButtons,
                     autoReconnect = autoReconnect,
                     deviceName = deviceName,
                     touchSensitivity = touchSensitivity,
@@ -480,6 +487,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 onGuideHoldToggle = {
                     guideHold = it
                     prefs.edit().putBoolean("guide_hold", it).apply()
+                },
+                onTrackpadButtonsToggle = {
+                    trackpadButtons = it
+                    prefs.edit().putBoolean("trackpad_buttons", it).apply()
                 },
                 onTouchVibrationToggle = {
                     touchVibration = it

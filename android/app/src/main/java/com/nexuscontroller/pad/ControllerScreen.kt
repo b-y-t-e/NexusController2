@@ -80,6 +80,8 @@ fun PSControllerScreen(
     isConnected: Boolean,
     /** Guide must be held rather than tapped; see PSCenterButton. */
     guideHold: Boolean = true,
+    /** Show the trackpad's button bar. Off by default — the gestures are always on. */
+    trackpadButtons: Boolean = false,
     showConnectionDialog: Boolean,
     currentMode: Int,
     controllerType: ControllerType,
@@ -554,10 +556,12 @@ fun PSControllerScreen(
         } else if (currentMode == 1) {
             TrackpadSurface(
                 scope = scope,
+                showButtonBar = trackpadButtons,
                 onToggleMenu = onToggleMenu,
                 onMouseMove = onMouseMove,
                 onScroll = onScroll,
-                onSendText = onSendText
+                onSendText = onSendText,
+                onVibrate = onVibrate
             )
         } else if (currentMode == 2) {
             RacingScreen(
@@ -733,106 +737,141 @@ private fun SizeStrip(config: CompConfig?, modifier: Modifier) {
 @Composable
 private fun TrackpadSurface(
     scope: kotlinx.coroutines.CoroutineScope,
+    showButtonBar: Boolean,
     onToggleMenu: () -> Unit,
     onMouseMove: (Float, Float, Boolean, Boolean) -> Unit,
     onScroll: (Float, Float) -> Unit,
-    onSendText: (String) -> Unit
+    onSendText: (String) -> Unit,
+    onVibrate: () -> Unit
 ) {
     val focusRequester = remember { FocusRequester() }
     var textState by remember { mutableStateOf(TextFieldValue(" ")) }
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    Box(Modifier.fillMaxSize()) {
-        Canvas(Modifier.fillMaxSize()) {
-            val step = 24.dp.toPx()
-            for (x in 0..size.width.toInt() step step.toInt()) {
-                for (y in 0..size.height.toInt() step step.toInt()) {
-                    drawCircle(
-                        color = Color(0xFF282E39).copy(alpha = 0.5f),
-                        radius = 0.8.dp.toPx(),
-                        center = Offset(x.toFloat(), y.toFloat())
-                    )
+    // rememberUpdatedState throughout: the pointer loop below is keyed on Unit,
+    // so it captures whatever these were at the first composition and never
+    // restarts. Reading them live is what keeps a sensitivity change — or a
+    // reconnect — from being ignored until the mode is left and re-entered.
+    val currentMove by rememberUpdatedState(onMouseMove)
+    val currentScroll by rememberUpdatedState(onScroll)
+    val currentVibrate by rememberUpdatedState(onVibrate)
+
+    val gestures = remember { TrackpadGestures() }
+    // The buttons currently held down, from either source: the gestures on the
+    // glass and the optional bar. Every message carries both, because the wire
+    // field is absolute — see PROTOCOL.md §"INPUT".
+    var heldLeft by remember { mutableStateOf(false) }
+    var heldRight by remember { mutableStateOf(false) }
+
+    fun send(dx: Float, dy: Float) = currentMove(dx, dy, heldLeft, heldRight)
+
+    fun hold(button: MouseButton, down: Boolean) {
+        when (button) {
+            MouseButton.LEFT -> heldLeft = down
+            MouseButton.RIGHT -> heldRight = down
+        }
+        send(0f, 0f)
+    }
+
+    fun run(actions: List<TrackpadAction>) {
+        actions.forEach { action ->
+            when (action) {
+                is TrackpadAction.Move -> send(action.dx, action.dy)
+                is TrackpadAction.Scroll -> currentScroll(action.dx, action.dy)
+                is TrackpadAction.Press -> {
+                    hold(action.button, true)
+                    // The one gesture with no visible cause: say it landed.
+                    currentVibrate()
+                }
+                is TrackpadAction.Release -> hold(action.button, false)
+                is TrackpadAction.Tap -> scope.launch {
+                    // Restore rather than clear: the bar may be holding this
+                    // very button while a tap happens on the glass.
+                    val wasHeld = if (action.button == MouseButton.LEFT) heldLeft else heldRight
+                    hold(action.button, true)
+                    delay(35)
+                    hold(action.button, wasHeld)
                 }
             }
         }
+    }
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    val density = this.density
-                    awaitEachGesture {
-                        awaitFirstDown()
-                        var maxPointers = 1
-                        var isDrag = false
+    // A button held by a surface that is going away is a button nobody lifts.
+    DisposableEffect(Unit) { onDispose { run(gestures.cancel()) } }
 
-                        do {
-                            val event = awaitPointerEvent()
-                            val activeChanges = event.changes.filter { it.pressed }
-                            val currentPointers = activeChanges.size
-
-                            if (currentPointers > maxPointers) {
-                                if (currentPointers >= 2) {
-                                    val p1 = activeChanges[0].position
-                                    val p2 = activeChanges[1].position
-                                    if ((p1 - p2).getDistance() / density > 25f) {
-                                        maxPointers = currentPointers
-                                    }
-                                } else {
-                                    maxPointers = currentPointers
-                                }
-                            }
-
-                            var dx = 0f
-                            var dy = 0f
-                            var movingCount = 0
-                            event.changes.forEach {
-                                if (it.pressed) {
-                                    dx += it.positionChange().x
-                                    dy += it.positionChange().y
-                                    movingCount++
-                                }
-                            }
-
-                            if (movingCount > 0) {
-                                dx /= movingCount
-                                dy /= movingCount
-                            }
-
-                            if (dx != 0f || dy != 0f) {
-                                if (!isDrag && (dx * dx + dy * dy) > 1.5f) isDrag = true
-
-                                if (isDrag) {
-                                    event.changes.forEach { if (it.positionChange() != Offset.Zero) it.consume() }
-                                    if (maxPointers >= 2) {
-                                        onScroll(dx * 0.8f, dy * 0.8f)
-                                    } else {
-                                        onMouseMove(dx, dy, false, false)
-                                    }
-                                }
-                            }
-                        } while (event.changes.any { it.pressed })
-
-                        onMouseMove(0f, 0f, false, false)
-
-                        if (!isDrag) {
-                            if (maxPointers == 1) {
-                                scope.launch {
-                                    onMouseMove(0f, 0f, true, false)
-                                    delay(35)
-                                    onMouseMove(0f, 0f, false, false)
-                                }
-                            } else if (maxPointers >= 2) {
-                                scope.launch {
-                                    onMouseMove(0f, 0f, false, true)
-                                    delay(35)
-                                    onMouseMove(0f, 0f, false, false)
-                                }
-                            }
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                val dragging = heldLeft || heldRight
+                Canvas(Modifier.fillMaxSize()) {
+                    val step = 24.dp.toPx()
+                    // The grid brightens while a button is down: the only sign
+                    // that a selection is running, since the cursor is on the PC.
+                    val dot = if (dragging) AppColors.Primary.copy(alpha = 0.45f)
+                    else Color(0xFF282E39).copy(alpha = 0.5f)
+                    for (x in 0..size.width.toInt() step step.toInt()) {
+                        for (y in 0..size.height.toInt() step step.toInt()) {
+                            drawCircle(color = dot, radius = 0.8.dp.toPx(), center = Offset(x.toFloat(), y.toFloat()))
                         }
                     }
                 }
-        )
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            val density = this.density
+                            awaitEachGesture {
+                                awaitFirstDown()
+                                run(gestures.begin(SystemClock.elapsedRealtime()))
+
+                                var event: androidx.compose.ui.input.pointer.PointerEvent
+                                do {
+                                    event = awaitPointerEvent()
+                                    val active = event.changes.filter { it.pressed }
+
+                                    var dx = 0f
+                                    var dy = 0f
+                                    active.forEach {
+                                        dx += it.positionChange().x
+                                        dy += it.positionChange().y
+                                    }
+                                    if (active.isNotEmpty()) {
+                                        dx /= active.size
+                                        dy /= active.size
+                                    }
+                                    val spread = if (active.size >= 2) {
+                                        (active[0].position - active[1].position).getDistance() / density
+                                    } else {
+                                        0f
+                                    }
+
+                                    val actions = gestures.update(active.size, dx, dy, spread)
+                                    if (actions.isNotEmpty()) {
+                                        event.changes.forEach {
+                                            if (it.positionChange() != Offset.Zero) it.consume()
+                                        }
+                                        run(actions)
+                                    }
+                                } while (event.changes.any { it.pressed })
+
+                                run(gestures.end(SystemClock.elapsedRealtime()))
+                            }
+                        }
+                )
+            }
+
+            if (showButtonBar) {
+                TrackpadButtonBar(
+                    heldLeft = heldLeft,
+                    heldRight = heldRight,
+                    onHold = { button, down ->
+                        hold(button, down)
+                        if (down) currentVibrate()
+                    }
+                )
+            }
+        }
 
         IconButton(
             onClick = { onToggleMenu() },
@@ -986,6 +1025,80 @@ private fun RacingScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * The two buttons of a laptop trackpad, for people who never meet the gestures.
+ *
+ * Off by default: the gestures are always there, and the bar costs a strip of
+ * the glass. Its point is that both of the things a gesture hides — the right
+ * button and holding the left one down — become visible. Holding the left
+ * button here and drawing on the pad with the other hand is a selection, the
+ * same one "tap and a half" makes, for a hand that has not learned the trick.
+ *
+ * Press and release rather than click: a button held is a button held, which is
+ * exactly what a laptop's is.
+ */
+@Composable
+private fun TrackpadButtonBar(
+    heldLeft: Boolean,
+    heldRight: Boolean,
+    onHold: (MouseButton, Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        TrackpadBarButton(
+            label = stringResource(R.string.trackpad_button_left),
+            held = heldLeft,
+            modifier = Modifier.weight(1f)
+        ) { down -> onHold(MouseButton.LEFT, down) }
+        TrackpadBarButton(
+            label = stringResource(R.string.trackpad_button_right),
+            held = heldRight,
+            modifier = Modifier.weight(1f)
+        ) { down -> onHold(MouseButton.RIGHT, down) }
+    }
+}
+
+@Composable
+private fun TrackpadBarButton(
+    label: String,
+    held: Boolean,
+    modifier: Modifier = Modifier,
+    onHold: (Boolean) -> Unit
+) {
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (held) AppColors.Primary else AppColors.Surface)
+            .border(
+                1.dp,
+                if (held) AppColors.Accent else Color.White.copy(alpha = 0.10f),
+                RoundedCornerShape(10.dp)
+            )
+            .pointerInput(Unit) {
+                detectTapGestures(onPress = {
+                    onHold(true)
+                    tryAwaitRelease()
+                    onHold(false)
+                })
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            color = if (held) Color.White else AppColors.TextGray,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 1.sp
+        )
     }
 }
 

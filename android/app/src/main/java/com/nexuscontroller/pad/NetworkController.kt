@@ -112,6 +112,15 @@ class NetworkController {
         deviceName: String
     ) {
         val dest = target ?: ConnectionTarget("127.0.0.1", Protocol.DEFAULT_PORT, "")
+        // The cursor state belongs to a connection, not to this object. The
+        // server lets go of every button a client was holding when it goes away,
+        // so a `lastMouseButtons` left over from the old session would suppress
+        // the message that presses it again — a selection interrupted by a
+        // reconnect would come back with the button believed down on one side
+        // and up on the other.
+        mouseAccX = 0f
+        mouseAccY = 0f
+        lastMouseButtons = -1
         val id = generation.incrementAndGet()
         current?.close()
         val conn = Connection(id, deviceType)

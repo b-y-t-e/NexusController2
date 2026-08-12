@@ -109,6 +109,10 @@
     <string name="settings_calibrate">CALIBRATE CENTER</string>
     <string name="settings_controls">Controls</string>
     <string name="settings_trackpad">Trackpad</string>
+    <string name="settings_trackpad_buttons">Button bar</string>
+    <string name="settings_trackpad_buttons_hint">Show left and right buttons under the trackpad</string>
+    <string name="trackpad_button_left">LEFT</string>
+    <string name="trackpad_button_right">RIGHT</string>
     <string name="settings_touch_sensitivity">Touch Sensitivity: %1$s</string>
     <string name="settings_reset">Reset Defaults</string>
     <string name="theme_dark">Dark</string>

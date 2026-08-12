@@ -55,7 +55,9 @@ data class SettingsState(
     val touchSensitivity: Float = 1.0f,
     val controllerType: ControllerType = ControllerType.XBOX360,
     /** Guide must be held rather than tapped. On by default — see PSCenterButton. */
-    val guideHold: Boolean = true
+    val guideHold: Boolean = true,
+    /** The trackpad's on-screen buttons. Off by default; the gestures are not. */
+    val trackpadButtons: Boolean = false
 )
 
 /**
@@ -81,6 +83,7 @@ fun SettingsScreen(
     onCalibrateGyro: () -> Unit, // New Param
     onTouchVibrationToggle: (Boolean) -> Unit,
     onGuideHoldToggle: (Boolean) -> Unit,
+    onTrackpadButtonsToggle: (Boolean) -> Unit,
     onAutoReconnectToggle: (Boolean) -> Unit,
     onDeviceNameChange: (String) -> Unit,
     onTouchSensitivityChange: (Float) -> Unit,
@@ -151,6 +154,7 @@ fun SettingsScreen(
                     onCalibrateGyro = onCalibrateGyro,
                     onTouchVibrationToggle = onTouchVibrationToggle,
                     onGuideHoldToggle = onGuideHoldToggle,
+                    onTrackpadButtonsToggle = onTrackpadButtonsToggle,
                     onAutoReconnectToggle = onAutoReconnectToggle,
                     onDeviceNameChange = onDeviceNameChange,
                     onTouchSensitivityChange = onTouchSensitivityChange,
@@ -339,6 +343,7 @@ fun SettingsContent(
     onCalibrateGyro: () -> Unit, // New Param
     onTouchVibrationToggle: (Boolean) -> Unit,
     onGuideHoldToggle: (Boolean) -> Unit,
+    onTrackpadButtonsToggle: (Boolean) -> Unit,
     onAutoReconnectToggle: (Boolean) -> Unit,
     onDeviceNameChange: (String) -> Unit,
     onTouchSensitivityChange: (Float) -> Unit,
@@ -487,10 +492,23 @@ fun SettingsContent(
                 Text(stringResource(R.string.settings_touch_sensitivity, String.format("%.1fx", state.touchSensitivity)), color = contentTextColor, fontSize = 14.sp)
                 Spacer(modifier = Modifier.height(8.dp))
                 CustomSlider(
-                    value = (state.touchSensitivity - 0.1f) / 1.9f, 
-                    onValueChange = { onTouchSensitivityChange(0.1f + it * 1.9f) }, 
-                    enabled = true, 
+                    value = (state.touchSensitivity - 0.1f) / 1.9f,
+                    onValueChange = { onTouchSensitivityChange(0.1f + it * 1.9f) },
+                    enabled = true,
                     trackColor = if(isLightMode) Color.Black.copy(alpha=0.1f) else Color.White.copy(alpha=0.1f)
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                SettingsToggleItem(
+                    title = stringResource(R.string.settings_trackpad_buttons),
+                    subtitle = stringResource(R.string.settings_trackpad_buttons_hint),
+                    icon = Icons.Rounded.TouchApp,
+                    checked = state.trackpadButtons,
+                    onCheckedChange = onTrackpadButtonsToggle,
+                    textColor = contentTextColor,
+                    containerColor = containerColor,
+                    borderColor = borderColor
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
