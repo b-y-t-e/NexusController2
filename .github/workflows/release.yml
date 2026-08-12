@@ -52,16 +52,18 @@ jobs:
 
       - name: Unit tests
         working-directory: android
-        run: ./gradlew --no-daemon testDebugUnitTest
+        run: ./gradlew --no-daemon testModernDebugUnitTest
 
-      - name: Build the APK
+      - name: Build the APKs
         working-directory: android
-        run: ./gradlew --no-daemon assembleDebug
+        run: ./gradlew --no-daemon assembleModernDebug assembleLegacyDebug
 
       - uses: actions/upload-artifact@v4
         with:
           name: NexusController-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            android/app/build/outputs/apk/modern/debug/app-modern-debug.apk
+            android/app/build/outputs/apk/legacy/debug/app-legacy-debug.apk
 
   publish:
     name: Publish release
@@ -78,7 +80,8 @@ jobs:
           mkdir -p release
           cp artifacts/NexusController-windows/NexusController.exe release/
           cp artifacts/NexusController-windows/SHA256SUMS.txt release/ || true
-          cp artifacts/NexusController-apk/app-debug.apk release/NexusController.apk
+          cp artifacts/NexusController-apk/app-modern-debug.apk release/NexusController.apk
+          cp artifacts/NexusController-apk/app-legacy-debug.apk release/NexusController-legacy.apk
           (cd release && sha256sum * > SHA256SUMS.txt)
           ls -la release
 
@@ -91,6 +94,7 @@ jobs:
             If ViGEmBus is missing the app offers to install it — reboot afterwards.
 
             **Phone:** install `NexusController.apk` (Android 9+), then scan the QR
-            code shown by the dashboard.
+            code shown by the dashboard. On an older phone use
+            `NexusController-legacy.apk`, which installs back to Android 5.
 
             Verify your download against `SHA256SUMS.txt`.

@@ -15,9 +15,12 @@ controller for Windows, over Wi-Fi or USB.
   * **DualShock 4** — for games that prefer a PlayStation pad (correct 8-way hat and lightbar).
   * **Buzz! (PS3)** — a big red buzzer plus four coloured answer buttons, mapped exactly the
     way RPCS3 expects. Up to four phones become buzzers 1–4.
-* **Four players** at once, one virtual pad each.
+* **Eight players** at once, one virtual pad each — though Windows only shows four
+  *XInput* pads to games, so past that point use DualShock 4 mode (see below).
 * **Rumble** relayed from the game back to the phone.
-* **Pairing by QR code** with a rotating token — nothing on your network can connect without it.
+* **Pairing by QR code** with a 128-bit token — nothing on your network can connect
+  without it. The token is kept between restarts by default, so a paired phone stays
+  paired; untick *Keep the same token* to rotate it on every start instead.
 * **Central configuration.** See every connected pad live on the PC and rearrange
   its buttons from there — drag them around, resize, rotate, then push the layout to
   one phone or to all of them at once. Save layouts as named profiles. You never have
@@ -32,7 +35,7 @@ controller for Windows, over Wi-Fi or USB.
 | PC | Windows 10 or 11 |
 | Python | only when running from source — 3.10 or newer. The released `.exe` needs none |
 | Driver | [ViGEmBus](https://github.com/nefarius/ViGEmBus/releases/latest), bundled inside the released `.exe` |
-| Phone | Android 9 (API 28) or newer |
+| Phone | Android 9 (API 28) or newer — or Android 5.0 with the *legacy* APK |
 | Network | Both devices on the same Wi-Fi, or a USB cable |
 
 ## Install (PC)
@@ -59,9 +62,28 @@ RunServer.bat
 
 Either way: press **START SERVER**, then scan the QR code with the phone app.
 
-Administrator rights are only needed for two optional things: the automatic firewall
-rule, and the mouse/keyboard feature. If you would rather not run the server elevated,
-run `tools\add_firewall_rule.bat` once as Administrator and start the server normally.
+### The firewall
+
+Over **Wi-Fi**, Windows has to let the phone in: inbound **TCP 6000** and **UDP 6001**.
+Over **USB** nothing is needed — the phone dials `127.0.0.1` through `adb reverse`.
+
+You do not have to configure that by hand. If the ports are closed the dashboard says
+so and offers an **Open port** button; Windows asks for Administrator consent once and
+the rules are added. They cover just those two ports, inbound, on the **private** network
+profile.
+
+Windows files most Wi-Fi networks — a phone hotspot included — under *public*, and a
+private-profile rule does nothing there. The dashboard says so when it applies, and
+offers a second button, **Include public networks**, which widens the rule. That is
+never done automatically: a public-profile rule applies on every public network the
+machine ever joins.
+
+A server started elevated adds the private rules itself and removes them again on exit.
+Rules you asked for with the button are yours and stay.
+
+If you would rather do it yourself, `tools\add_firewall_rule.bat` run once as
+Administrator does exactly the same thing. Administrator rights are needed for nothing
+else except the optional mouse/keyboard feature.
 
 ### Command line
 
@@ -76,14 +98,28 @@ run `tools\add_firewall_rule.bat` once as Administrator and start the server nor
 Download `NexusController.apk` from the [latest release](../../releases/latest) and
 install it — Android will ask you to allow installs from this source.
 
+If the phone is too old for it, take `NexusController-legacy.apk` instead: the same
+app, built to install back to **Android 5.0**. It exists because a room of four Buzz
+buzzers is usually four phones out of a drawer, not four current ones.
+
 To build it yourself, open `android/` in Android Studio, or from the command line:
 
 ```bat
 cd android
-gradlew.bat assembleDebug
+gradlew.bat assembleModernDebug assembleLegacyDebug
 ```
 
-The APK lands in `android/app/build/outputs/apk/debug/`.
+They land in `android/app/build/outputs/apk/modern/debug/` and `.../legacy/debug/`.
+
+To build *both* halves of a release the way a tag does — tests, the `.exe`, the
+APK, and a `SHA256SUMS.txt` over them — run one script from the repository root:
+
+```bat
+.venv\Scripts\python build_release.py
+```
+
+Everything ends up in `release/`. `--exe-only`, `--apk-only` and
+`--skip-tests` narrow it down while iterating.
 
 ## Connecting
 
@@ -133,10 +169,12 @@ implemented in `server/nexus_server/buzz.py` and covered by tests, for reference
 
 ## How many controllers?
 
-Four players connect to the server at once, but **Windows itself exposes only four
+Eight players connect to the server at once, but **Windows itself exposes only four
 XInput slots for the whole machine**, and physical controllers share them. So:
 
 * 4 phones in Xbox/Buzz mode → 4 XInput pads, verified as four independent devices.
+* Beyond four, an Xbox/Buzz phone still connects and still gets its own player slot,
+  but games will not see it — put those phones in DualShock 4 mode.
 * 1 physical Xbox pad plugged in → only **3** phones will be visible to games.
 * A fifth XInput device is created without any error by the driver but is invisible to
   every game. The server detects this and shows a warning in the dashboard instead of
@@ -149,8 +187,9 @@ XInput slots for the whole machine**, and physical controllers share them. So:
 This server accepts input that moves your mouse and presses buttons, so it is built to
 be uninteresting to anything else on the network:
 
-* Every client must present a **128-bit pairing token**, compared in constant time. The
-  token rotates on each start unless you pin it, and is only ever shown as a QR code.
+* Every client must present a **128-bit pairing token**, compared in constant time. It
+  is only ever shown as a QR code, and is kept between restarts so paired phones stay
+  paired; untick *Keep the same token* to have a fresh one on every start.
 * Five failed handshakes from one address earn a **60-second block**.
 * The server binds **one chosen interface**, not `0.0.0.0`.
 * The firewall rule it adds is scoped to the **private** profile and is **removed on exit**.
@@ -193,6 +232,7 @@ server/nexus_server/
   config.py     settings in %APPDATA%\NexusController
   app.py        dashboard and CLI
   web/          dashboard assets (no CDN, no network)
+build_release.py         builds .exe + .apk into release/, as a tag would
 tools/build_exe.py       builds the single-file .exe, bundling ViGEmBus
 tools/smoke_test.py      real ViGEmBus + XInput round-trip
 android/                 Jetpack Compose client
@@ -209,9 +249,9 @@ directory, so the app keeps working from `Program Files`.
 | Symptom | Fix |
 | --- | --- |
 | `SIMULATION` badge in the dashboard | ViGEmBus is not installed. Click **Install driver** in the yellow banner (the released `.exe` bundles the installer), then reboot. Running from source? Install it from the link above. |
-| Phone cannot see the server | Run `tools\add_firewall_rule.bat` as Administrator. Check both devices are on the same network and that the router does not use AP isolation. |
+| Phone cannot see the server | If the dashboard shows the firewall banner, press **Open port**. Otherwise check both devices are on the same network and that the router does not use AP isolation. |
 | Layout pushed from the PC did not arrive | The phone must be connected — the dashboard reports "Player not connected". Check the player card shows a live thumbnail. |
-| "Invalid pairing token" | The token rotated when the server restarted. Scan the QR code again, or tick *Keep the same token between restarts*. |
+| "Invalid pairing token" | The token changed — you pressed **New**, or unticked *Keep the same token between restarts*. Scan the QR code again. |
 | Buzz buttons do nothing in RPCS3 | Set **Emulated Buzz devices** to *1 controller* in RPCS3's I/O settings. |
 | Input lag | Prefer 5 GHz Wi-Fi, or use USB mode. |
 | Mouse mode does nothing | Enable *Desktop control* in the dashboard and make sure the right player slot is selected. |

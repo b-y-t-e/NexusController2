@@ -135,8 +135,10 @@ def build(driver: Path | None, icon: Path | None) -> int:
         return 1
 
     digest = hashlib.sha256(produced.read_bytes()).hexdigest()
+    # newline="\n": a CRLF here makes "sha256sum -c" treat the \r as part of the
+    # file name, so the checksum file is unusable on anything but Windows.
     (ROOT / "dist" / "SHA256SUMS.txt").write_text(
-        f"{digest}  {produced.name}\n", encoding="utf-8"
+        f"{digest}  {produced.name}\n", encoding="utf-8", newline="\n"
     )
     log(f"built {produced.name} — {produced.stat().st_size / 1_048_576:.1f} MiB")
     log(f"sha256 {digest}")

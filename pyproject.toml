@@ -31,6 +31,6 @@ nexus_server = ["web/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["server"]
+pythonpath = ["server", "."]   # "." so tests can import build_release.py
 addopts = "-q --timeout=30"
 filterwarnings = ["error::DeprecationWarning:nexus_server.*"]
