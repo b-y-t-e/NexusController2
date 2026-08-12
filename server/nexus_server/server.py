@@ -609,7 +609,8 @@ class ControllerServer:
                 self.desktop.handle_text(session.index, text.decode("utf-8", errors="replace"))
 
             elif opcode == ClientOpcode.MOUSE:
-                self.desktop.handle_mouse(session.index, MouseDelta.decode(reader.read(3)))
+                delta = MouseDelta.decode(reader.read(3))
+                self._move_cursor(session, delta.dx, delta.dy, touch=delta.buttons)
 
             elif opcode == ClientOpcode.SCROLL:
                 self.desktop.handle_scroll(session.index, ScrollDelta.decode(reader.read(2)))
@@ -698,17 +699,56 @@ class ControllerServer:
         if pad is not None:
             pad.apply(state)
 
+    def _move_cursor(
+        self,
+        session: PlayerSession,
+        dx: int,
+        dy: int,
+        *,
+        touch: int | None = None,
+        triggers: int | None = None,
+    ) -> None:
+        """The single place a cursor message is built, from both button sources.
+
+        A phone in trackpad mode drives the cursor down two streams at once:
+        MOUSE messages from the finger, and mouse-mode INPUT frames from the pad,
+        which keep arriving as a heartbeat even when nothing is touched. Both
+        carry an *absolute* button field, so whichever spoke last used to define
+        the truth — and the heartbeat, holding no triggers, let go of the button
+        the finger was still pressing. Dragging anything was impossible.
+
+        Each source therefore keeps its own state on the session, and what
+        reaches the desktop is the union: a button stays down while *anything*
+        is holding it, and only the source that pressed it can let it go.
+        """
+        if touch is not None:
+            session.touch_buttons = touch
+        if triggers is not None:
+            session.trigger_buttons = triggers
+        self.desktop.handle_mouse(
+            session.index, MouseDelta(dx, dy, session.mouse_buttons_held)
+        )
+
     def _apply_mouse_mode(self, session: PlayerSession, state: InputState) -> None:
-        if session.gyro_centre is None:
-            session.gyro_centre = (state.roll, state.pitch)
-        dx, dy = gyro_to_mouse(state.roll, state.pitch, *session.gyro_centre)
+        # Only steer from the gyro when the client says the reading means
+        # something. A phone with the sensor switched off sends zeroes, and
+        # latching a centre on those made the cursor bolt across the screen the
+        # moment the sensor was switched back on mid-session: the first real
+        # reading was then a huge distance from a centre of (0, 0). The buttons
+        # below are unaffected — a trigger is a trigger either way.
+        if state.gyro_valid:
+            if session.gyro_centre is None:
+                session.gyro_centre = (state.roll, state.pitch)
+            dx, dy = gyro_to_mouse(state.roll, state.pitch, *session.gyro_centre)
+        else:
+            session.gyro_centre = None
+            dx, dy = 0, 0
         buttons = 0
         if state.right_trigger > 100:
             buttons |= MouseDelta.LEFT
         if state.left_trigger > 100:
             buttons |= MouseDelta.RIGHT
-        self.desktop.handle_mouse(session.index, MouseDelta(dx, dy, buttons))
-        session.mouse_buttons_held = buttons
+        self._move_cursor(session, dx, dy, triggers=buttons)
 
     def reset_desktop_state(self) -> None:
         """Drop every key and mouse button the desktop feature is holding down.
@@ -727,14 +767,23 @@ class ControllerServer:
         """
         for session in self.slots.sessions:
             session.keys.release()
-            session.mouse_buttons_held = 0
+            session.touch_buttons = 0
+            session.trigger_buttons = 0
         self.desktop.release_all()
 
     def _release_keys(self, session: PlayerSession) -> None:
+        """Let go of everything this slot is holding on the PC, on its way out.
+
+        A phone that drops mid-drag — Wi-Fi gone, battery flat, app killed —
+        leaves the button pressed otherwise, and nothing on the desktop recovers
+        from that by itself: every movement keeps selecting or dragging until
+        somebody clicks. The trackpad's buttons were tracked nowhere at all
+        before, so only the gyro trigger-click was ever released here.
+        """
         for key, pressed in session.keys.release():
             self.desktop.set_key(session.index, key, pressed)
         if session.mouse_buttons_held:
-            self.desktop.handle_mouse(session.index, MouseDelta(0, 0, 0))
+            self._move_cursor(session, 0, 0, touch=0, triggers=0)
 
     def _send_rumble(self, session: PlayerSession, large: int, small: int) -> None:
         if self.settings.haptics and session.connected:

@@ -73,7 +73,13 @@ class PlayerSession:
 
         # Mouse-mode gyro reference.
         self.gyro_centre: tuple[int, int] | None = None
-        self.mouse_buttons_held = 0
+        #: Mouse buttons this slot is holding down on the PC, by where they came
+        #: from. They are kept apart because the wire carries an *absolute*
+        #: button field in both messages: a pad frame saying "no triggers" would
+        #: otherwise let go of the button a finger is still holding on the
+        #: trackpad, and the two arrive independently.
+        self.touch_buttons = 0      # from MOUSE messages — the trackpad
+        self.trigger_buttons = 0    # from mouse-mode INPUT frames — the triggers
 
         #: Serialises writes to :attr:`connection`. Rumble arrives on a ViGEm
         #: callback thread while PONG/LED go out from the reader thread; without
@@ -114,9 +120,15 @@ class PlayerSession:
         self.name = ""
         self.visuals = Visuals()
         self.gyro_centre = None
-        self.mouse_buttons_held = 0
+        self.touch_buttons = 0
+        self.trigger_buttons = 0
         self.config = None
         self.config_pending = False
+
+    @property
+    def mouse_buttons_held(self) -> int:
+        """Everything this slot is holding down, whichever stream pressed it."""
+        return self.touch_buttons | self.trigger_buttons
 
     # -- I/O ----------------------------------------------------------------
 

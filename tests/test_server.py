@@ -531,11 +531,57 @@ class TestDesktopControl:
             wait_for(lambda: desktop_backend.scrolls == [(0, 2)])
             assert desktop_backend.mouse_buttons["left"] is True
 
+    def test_a_trackpad_drag_survives_the_input_heartbeat(self, server, desktop_backend):
+        """Holding a button on the trackpad must not be undone by a pad frame.
+
+        In trackpad mode the phone sends two streams at once: MOUSE messages from
+        the finger, and ordinary INPUT frames carrying the mouse-mode flag — at
+        least one every 250 ms, because the pad heartbeats even when nothing is
+        touched. Both end up at handle_mouse, whose button field is *absolute*,
+        so the heartbeat used to arrive with no buttons set and let go of the
+        button the finger was still holding. Dragging a window or selecting text
+        could therefore never last longer than one heartbeat.
+        """
+        server.desktop.enabled = True
+        with Client(server).connect() as client:
+            client.send_raw(bytes([P.ClientOpcode.MOUSE, 0x00, 0x00, 0x01]))
+            wait_for(lambda: desktop_backend.mouse_buttons.get("left") is True)
+
+            client.send_input(flags=int(InputFlag.MOUSE_MODE))
+            client.send_raw(bytes([P.ClientOpcode.PING]) + struct.pack(">I", 1))
+            client.read_message()      # the frame has certainly been handled by now
+            assert desktop_backend.mouse_buttons["left"] is True, "the drag was dropped"
+
+            client.send_raw(bytes([P.ClientOpcode.MOUSE, 0x00, 0x00, 0x00]))
+            wait_for(lambda: desktop_backend.mouse_buttons.get("left") is False)
+
+    def test_a_held_mouse_button_is_released_when_the_phone_goes_away(
+        self, server, desktop_backend
+    ):
+        """A phone that drops mid-drag must not leave the button down on the PC.
+
+        Nothing on the desktop recovers from this by itself: the button stays
+        pressed, every mouse move keeps selecting or dragging, and the person at
+        the keyboard has to click to break it. The gyro path already released
+        what it held; the trackpad's own buttons were tracked nowhere.
+        """
+        server.desktop.enabled = True
+        client = Client(server).connect()
+        client.send_raw(bytes([P.ClientOpcode.MOUSE, 0x00, 0x00, 0x03]))
+        wait_for(lambda: desktop_backend.mouse_buttons.get("left") is True)
+        assert desktop_backend.mouse_buttons["right"] is True
+
+        client.close()
+        wait_for(lambda: not server.slots.sessions[0].connected)
+        assert desktop_backend.mouse_buttons["left"] is False
+        assert desktop_backend.mouse_buttons["right"] is False
+
     def test_mouse_mode_moves_the_cursor_instead_of_the_pad(self, server, desktop_backend):
         server.desktop.enabled = True
         with Client(server).connect() as client:
-            client.send_input(roll=0, pitch=0, flags=InputFlag.MOUSE_MODE)
-            client.send_input(roll=4000, pitch=0, flags=InputFlag.MOUSE_MODE, lx=127)
+            gyro = int(InputFlag.MOUSE_MODE | InputFlag.GYRO_VALID)
+            client.send_input(roll=0, pitch=0, flags=gyro)
+            client.send_input(roll=4000, pitch=0, flags=gyro, lx=127)
             wait_for(lambda: any(dx > 0 for dx, _ in desktop_backend.moves))
             pad = pad_for(server, client.slot)
             assert pad.state.lx == 0.0
@@ -594,6 +640,37 @@ class TestDesktopControl:
             assert desktop_backend.mouse_buttons["left"] is False
             assert session.mouse_buttons_held == 0
 
+    def test_a_phone_with_the_sensor_off_never_steers_the_cursor(
+        self, server, desktop_backend
+    ):
+        """GYRO_VALID is the client saying whether roll and pitch mean anything.
+
+        The trackpad sends mouse-mode frames whatever the sensor is doing, so
+        without honouring the flag the cursor is driven by two things at once —
+        and a centre latched from a switched-off sensor's zeroes made the cursor
+        bolt across the screen the moment it was switched on again.
+        """
+        server.desktop.enabled = True
+        with Client(server).connect() as client:
+            session = server.slots.sessions[0]
+            client.send_input(flags=int(InputFlag.MOUSE_MODE), roll=4000, pitch=-4000)
+            client.send_raw(bytes([P.ClientOpcode.PING]) + struct.pack(">I", 1))
+            client.read_message()
+            # A (0, 0) delta is recorded but moves nothing — the real backend
+            # skips it. What must never appear is an actual displacement.
+            assert [m for m in desktop_backend.moves if m != (0, 0)] == []
+            assert session.gyro_centre is None, "an invalid reading is not a centre"
+
+            client.send_input(
+                flags=int(InputFlag.MOUSE_MODE | InputFlag.GYRO_VALID),
+                roll=0, pitch=0,
+            )
+            client.send_input(
+                flags=int(InputFlag.MOUSE_MODE | InputFlag.GYRO_VALID),
+                roll=4000, pitch=0,
+            )
+            wait_for(lambda: desktop_backend.moves and desktop_backend.moves[-1][0] > 0)
+
     def test_disabling_desktop_control_releases_a_held_key(self, server, desktop_backend):
         server.settings.key_bindings = {"0": {"a": "space"}}
         server.desktop.enabled = True
@@ -617,7 +694,9 @@ class TestDesktopControl:
         server.desktop.enabled = True
         with Client(server).connect() as client:
             session = server.slots.sessions[0]
-            client.send_input(roll=1000, flags=InputFlag.MOUSE_MODE)
+            client.send_input(
+                roll=1000, flags=int(InputFlag.MOUSE_MODE | InputFlag.GYRO_VALID)
+            )
             wait_for(lambda: session.gyro_centre == (1000, 0))
 
             # Out of mouse mode, holding the bound button.

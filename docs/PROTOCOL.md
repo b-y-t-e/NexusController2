@@ -70,6 +70,22 @@ connection is closed. The server applies a handshake timeout (default 5 s).
 
 `-128` is not a legal axis value; the server clamps it to `-127`.
 
+**The two flags mean different things and are independent.** *Mouse mode* says the
+frame is for the cursor rather than the pad. *Gyro valid* says the roll and pitch
+fields carry a real reading, and the server steers from them **only when it is
+set** — a client whose sensor is off sends zeroes, and a server that took those
+for a reading would fix its reference point on them and then throw the cursor
+across the screen the moment the sensor came back. A client that does not send
+gyro leaves the flag clear and the fields zero.
+
+Mouse buttons reach the desktop from two independent messages — the triggers in a
+mouse-mode `INPUT` and the button field of `MOUSE` — and both fields are
+*absolute*. A server that lets each message define the whole button state will
+have a pad heartbeat release the button a finger is holding, so **the state of
+each source is tracked separately and what reaches the desktop is their union**:
+a button stays down while any source holds it, and only the source that pressed
+it can let it go. The server releases everything a client holds when it goes away.
+
 ### `0x02` TEXT — keyboard injection
 
 | offset | size | field |
