@@ -15,9 +15,15 @@ import secrets
 import tempfile
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
-from .protocol import DEFAULT_DISCOVERY_PORT, DEFAULT_TCP_PORT, DeviceType
+from .protocol import (
+    DEFAULT_DISCOVERY_PORT,
+    DEFAULT_TCP_PORT,
+    MAX_PLAYERS,
+    MAX_TOKEN_LEN,
+    DeviceType,
+)
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +49,19 @@ def generate_token() -> str:
     return secrets.token_hex(TOKEN_BYTES)
 
 
+#: Long enough to be worth having, short enough for the wire's length byte.
+MIN_TOKEN_CHARS: Final = 8
+
+
+def _valid_token(token: Any) -> bool:
+    """Whether a stored token can legally go into a HELLO and a QR payload."""
+    return (
+        isinstance(token, str)
+        and MIN_TOKEN_CHARS <= len(token) <= MAX_TOKEN_LEN
+        and all(ch in "0123456789abcdefABCDEF" for ch in token)
+    )
+
+
 @dataclass
 class Settings:
     #: Force feedback relayed back to the phone.
@@ -53,8 +72,11 @@ class Settings:
     desktop_slot: int = 0
     #: Require a matching pairing token in the handshake.
     require_token: bool = True
-    #: Keep the same token across restarts instead of rotating it.
-    pin_token: bool = False
+    #: Keep the same token across restarts instead of rotating it. On by default:
+    #: a rotating token means every phone has to rescan the QR code after every
+    #: restart of the app, which is a lot of friction to pay for a threat that
+    #: needs an attacker already on your LAN.
+    pin_token: bool = True
     token: str = field(default_factory=generate_token)
     #: Interface to bind, or ``""`` for the auto-detected LAN address.
     bind_ip: str = ""
@@ -84,12 +106,16 @@ class Settings:
         data = asdict(self)
         data["port"] = _clamp_port(self.port, DEFAULT_TCP_PORT)
         data["discovery_port"] = _clamp_port(self.discovery_port, DEFAULT_DISCOVERY_PORT)
-        data["desktop_slot"] = max(0, min(3, int(self.desktop_slot)))
+        data["desktop_slot"] = max(0, min(MAX_PLAYERS - 1, int(self.desktop_slot)))
         try:
             data["default_device_type"] = int(DeviceType(self.default_device_type))
         except ValueError:
             data["default_device_type"] = int(DeviceType.XBOX360)
-        if not isinstance(self.token, str) or len(self.token) < 8:
+        # Hex, not merely long enough. The pairing payload is a colon-separated
+        # format with a hex token field (PROTOCOL.md §8) and encoding one refuses
+        # anything else — so a hand-edited settings.json holding "mypassword"
+        # would take the whole dashboard down with it the first time it polled.
+        if not _valid_token(self.token):
             data["token"] = generate_token()
         if not isinstance(self.key_bindings, dict):
             data["key_bindings"] = {}

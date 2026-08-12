@@ -26,7 +26,7 @@ from .desktop import DesktopControl, create_backend
 from .devices import DriverUnavailableError, FakeBackend, PadBackend, VGamepadBackend
 from .netinfo import local_ips
 from .padconfig import PadConfig, describe_components
-from .protocol import DeviceType, ProtocolError
+from .protocol import DeviceType, ProtocolError, valid_ipv4
 from .server import ControllerServer
 
 log = logging.getLogger(__name__)
@@ -56,6 +56,10 @@ def _bundled_driver() -> Path | None:
     return None
 MAX_LOG_LINES = 200
 DRIVER_HELP_URL = "https://github.com/nefarius/ViGEmBus/releases/latest"
+#: How long a firewall check is reused before ``netsh`` is asked again.
+FIREWALL_CACHE_SECONDS = 15.0
+#: How long to wait for the elevated command to actually add the rules.
+FIREWALL_VERIFY_SECONDS = 8.0
 
 
 class Api:
@@ -76,6 +80,10 @@ class Api:
             self.settings, backend, self.desktop, log_sink=self._append_log
         )
         self._qr_cache: tuple[str, str] | None = None
+        #: ``(checked_at, rules_present, public_networks)`` — see :meth:`firewall_status`.
+        self._firewall_cache: tuple[float, bool | None, list[str]] | None = None
+        #: Third-party firewalls, looked up once — they do not come and go.
+        self._other_firewalls: list[str] | None = None
         self._pps_last_total = 0
         self._pps_last_time = time.monotonic()
         self._pps = 0
@@ -110,7 +118,10 @@ class Api:
             {
                 "pps": self._packets_per_second() if state["running"] else 0,
                 "qr": self._qr_image() if state["running"] else None,
-                "pairing": self.server.pairing_payload if state["running"] else "",
+                # Guarded: pairing_payload validates the address and the token,
+                # and the dashboard polls this five times a second. One bad field
+                # must dim the QR code, not take the whole window down.
+                "pairing": self._pairing_payload_or_empty() if state["running"] else "",
                 "token": self.settings.token if self.settings.require_token else "",
                 "ips": local_ips(),
                 "bind_ip": self.settings.bind_ip,
@@ -132,8 +143,17 @@ class Api:
         )
         return state
 
+    def _pairing_payload_or_empty(self) -> str:
+        try:
+            return self.server.pairing_payload
+        except ProtocolError as exc:
+            log.warning("cannot build the pairing payload: %s", exc)
+            return ""
+
     def _qr_image(self) -> str | None:
-        payload = self.server.pairing_payload
+        payload = self._pairing_payload_or_empty()
+        if not payload:
+            return None
         if self._qr_cache and self._qr_cache[0] == payload:
             return self._qr_cache[1]
         try:
@@ -156,6 +176,10 @@ class Api:
 
     def start_server(self, bind_ip: str | None = None) -> dict:
         if bind_ip and bind_ip != "AUTO":
+            # Checked here, where it can still be refused with a message, rather
+            # than at the first poll where it would only produce a broken QR.
+            if not valid_ipv4(bind_ip):
+                return {"ok": False, "error": f"{bind_ip} is not an IPv4 address"}
             self.settings.bind_ip = bind_ip
         elif bind_ip == "AUTO":
             self.settings.bind_ip = ""
@@ -186,9 +210,10 @@ class Api:
         if enabled and not self.desktop.available:
             return {"ok": False, "error": "pynput is not installed"}
         self.settings.desktop_control = bool(enabled)
+        # Gate first, release second — see set_desktop_slot.
         self.desktop.enabled = self.settings.desktop_control
         if not enabled:
-            self.desktop.release_all()
+            self.server.reset_desktop_state()
         self._persist()
         self._append_log(
             "Desktop control ENABLED — connected phones can move the mouse and type"
@@ -199,8 +224,16 @@ class Api:
 
     def set_desktop_slot(self, slot: int) -> int:
         slot = max(0, min(len(self.server.slots) - 1, int(slot)))
+        changed = slot != self.desktop.slot
         self.settings.desktop_slot = slot
+        # Shut the gate *first*, then release. The other order leaves a window in
+        # which an input frame from the old slot is still allowed through and can
+        # press a key that the reset has already accounted for as released.
         self.desktop.slot = slot
+        if changed:
+            # The old slot loses the lock this instant and can no longer send a
+            # release, so whatever it was holding has to be let go here.
+            self.server.reset_desktop_state()
         self._persist()
         return slot
 
@@ -259,9 +292,13 @@ class Api:
 
     def _apply_bindings(self, slot: int) -> None:
         if 0 <= slot < len(self.server.slots):
-            self.server.slots.sessions[slot].keys.set_bindings(
+            stranded = self.server.slots.sessions[slot].keys.set_bindings(
                 self.settings.key_bindings.get(str(slot), {})
             )
+            # Whatever the old bindings were holding down has just lost the only
+            # thing that could have released it.
+            for key, pressed in stranded:
+                self.desktop.set_key(slot, key, pressed)
 
     # -- central pad configuration -----------------------------------------
 
@@ -396,6 +433,152 @@ class Api:
         from .protocol import encode_rumble  # noqa: PLC0415
 
         return session.send(encode_rumble(magnitude, magnitude))
+
+    def _serving_profile(self, system, categories: dict[str, str]) -> str:
+        """Which firewall profile covers the interface the server serves on.
+
+        The bound address decides it. "Is any network public?" is a different and
+        usually wrong question — a VPN adapter or a second Wi-Fi would drag the
+        answer to "public" on a machine serving a private LAN, and then a
+        perfectly good rule reads as missing.
+        """
+        category = system.network_category_for(self.server.bind_ip or "")
+        if category is None:
+            # Unknown: fall back to the cautious reading, so a public network we
+            # failed to identify is not silently treated as covered. Uses the
+            # categories already read for this cache entry rather than asking
+            # PowerShell all over again.
+            if any(c.lower() == "public" for c in categories.values()):
+                return "public"
+            return "private"
+        return "public" if category.lower() == "public" else "private"
+
+    def firewall_status(self) -> dict:
+        """Whether the LAN ports are open, and whether we can offer to open them.
+
+        Cached: answering means shelling out to ``netsh`` twice, which is far too
+        expensive for the dashboard's poll loop, and the answer only changes when
+        somebody changes it.
+        """
+        from . import system  # noqa: PLC0415
+
+        now = time.monotonic()
+        if self._firewall_cache is None or now - self._firewall_cache[0] > FIREWALL_CACHE_SECONDS:
+            # Everything expensive goes inside the cache, not just the netsh
+            # calls: reading the network category spawns a PowerShell, which is
+            # dearer than both of them and was running on every single poll.
+            categories = system.active_network_categories()
+            public_now = self._serving_profile(system, categories) == "public"
+            self._firewall_cache = (
+                now,
+                # Asked about the profile the *current* network actually uses.
+                # Answering "open" from a private-profile rule while sitting on a
+                # public network is how the banner used to disappear on a port
+                # that was still shut.
+                system.firewall_rules_present(
+                    self.settings.port,
+                    self.settings.discovery_port,
+                    "public" if public_now else "private",
+                ),
+                # The rules are scoped to the private profile, so a network
+                # Windows has filed under Public is not covered by them at all —
+                # the commonest way for every rule to be in place and the port to
+                # still be shut.
+                sorted(
+                    name
+                    for name, category in categories.items()
+                    if category.lower() == "public"
+                ),
+            )
+        if self._other_firewalls is None:
+            self._other_firewalls = system.third_party_firewalls()
+        return {
+            "open": self._firewall_cache[1],
+            "windows": system.is_windows(),
+            "admin": system.is_admin(),
+            "tcp": self.settings.port,
+            "udp": self.settings.discovery_port,
+            # USB never needs a rule: the phone dials 127.0.0.1 through adb reverse.
+            "needed_for": "Wi-Fi",
+            "others": self._other_firewalls,
+            "public_networks": self._firewall_cache[2],
+        }
+
+    def open_firewall(self, include_public: bool = False) -> dict:
+        """Offer to open the ports, elevating through UAC if we are not admin.
+
+        Waits for the result instead of reporting the launch as a success.
+        ``ShellExecute`` returns the moment the elevated process starts, so
+        "opening…" is not an outcome — and when nothing appears afterwards the
+        user is left pressing a button that seems to do nothing.
+        """
+        from . import system  # noqa: PLC0415
+
+        result = system.open_firewall_elevated(
+            self.settings.port, self.settings.discovery_port, include_public=bool(include_public)
+        )
+        self._firewall_cache = None      # whatever it was, re-read it next time
+        if not result.ok:
+            self._append_log(result.message)
+            return {"ok": False, "message": result.message}
+
+        profile = self._serving_profile(system, system.active_network_categories())
+
+        deadline = time.monotonic() + FIREWALL_VERIFY_SECONDS
+        present: bool | None = False
+        while time.monotonic() < deadline:
+            present = system.firewall_rules_present(
+                self.settings.port, self.settings.discovery_port, profile
+            )
+            if present is not False:
+                break
+            time.sleep(0.4)
+
+        others = self._other_firewalls or system.third_party_firewalls()
+        if present:
+            message = f"Ports open: TCP {self.settings.port}, UDP {self.settings.discovery_port}"
+            if others:
+                message += (
+                    f". Note: {', '.join(others)} filters traffic as well, so you may "
+                    "also have to allow the app there"
+                )
+        elif system.firewall_rules_present(
+            self.settings.port,
+            self.settings.discovery_port,
+            "private" if profile == "public" else "public",
+        ):
+            # The commonest outcome of all, and the one the old message got
+            # flatly wrong: the command ran, the rules are there, they just do
+            # not cover the network this PC is actually on.
+            other = "private" if profile == "public" else "public"
+            advice = (
+                "Press “Include public networks”, or set that network to private "
+                "in Windows settings."
+                if profile == "public"
+                else "Remove the rules and add them again from here."
+            )
+            message = (
+                f"The rules were added, but only for {other} networks — and Windows "
+                f"lists the network this PC is on as {profile}. {advice}"
+            )
+        elif present is None:
+            # Three outcomes, not two. Reporting "the rules were not added" when
+            # the truth is "netsh could not be asked" sends the user hunting for
+            # a problem that may not exist.
+            message = (
+                "Windows accepted the command, but the rules could not be read back — "
+                f"check TCP {self.settings.port} and UDP {self.settings.discovery_port} "
+                "in Windows Defender Firewall yourself"
+            )
+        else:
+            message = (
+                "The rules were not added — the elevated command did not run. "
+                "Run tools\\add_firewall_rule.bat as Administrator to see why"
+            )
+            if others:
+                message += f", and check whether {', '.join(others)} blocked it"
+        self._append_log(message)
+        return {"ok": present is True, "unknown": present is None, "message": message}
 
     def driver_status(self) -> dict:
         """Whether ViGEmBus is usable, and whether we can install it ourselves."""

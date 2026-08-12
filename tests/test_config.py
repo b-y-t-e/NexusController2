@@ -5,7 +5,12 @@ import json
 import pytest
 
 from nexus_server.config import Settings, SettingsStore, generate_token
-from nexus_server.protocol import DEFAULT_TCP_PORT, DeviceType
+from nexus_server.protocol import (
+    DEFAULT_TCP_PORT,
+    MAX_PLAYERS,
+    DeviceType,
+    encode_pairing_payload,
+)
 
 
 @pytest.fixture()
@@ -19,6 +24,10 @@ class TestDefaults:
 
     def test_token_is_required_by_default(self):
         assert Settings().require_token is True
+
+    def test_the_token_survives_a_restart_by_default(self):
+        """Rotating it means rescanning the QR code on every start of the app."""
+        assert Settings().pin_token is True
 
     def test_each_instance_gets_its_own_token(self):
         assert Settings().token != Settings().token
@@ -82,11 +91,24 @@ class TestResilience:
 
     def test_desktop_slot_is_clamped(self, store):
         store.path.write_text(json.dumps({"desktop_slot": 99}), encoding="utf-8")
-        assert store.load().desktop_slot == 3
+        assert store.load().desktop_slot == MAX_PLAYERS - 1
 
     def test_short_token_is_regenerated(self, store):
         store.path.write_text(json.dumps({"pin_token": True, "token": "x"}), encoding="utf-8")
         assert len(store.load().token) == 32
+
+    @pytest.mark.parametrize("token", ["mypassword123", "zzzzzzzzzz", "a" * 65, 12345678])
+    def test_a_token_that_cannot_be_encoded_is_regenerated(self, store, token):
+        """The pairing payload refuses anything but hex (§8).
+
+        Letting one through meant the dashboard threw on its very first poll,
+        from a settings file the user could plausibly have edited by hand.
+        """
+        store.path.write_text(json.dumps({"pin_token": True, "token": token}), encoding="utf-8")
+        loaded = store.load()
+        assert len(loaded.token) == 32
+        # The real proof: it survives the round trip the dashboard performs.
+        encode_pairing_payload("192.168.1.5", loaded.port, loaded.token)
 
     def test_bad_key_bindings_type_is_reset(self, store):
         store.path.write_text(json.dumps({"key_bindings": "nope"}), encoding="utf-8")

@@ -6,10 +6,27 @@ shapes are a contract with `web/app.js` and `web/designer.js`.
 
 import pytest
 
+from nexus_server import system
 from nexus_server.app import Api
+from nexus_server.desktop import FakeDesktop
 from nexus_server.devices import FakeBackend
 from nexus_server.padconfig import PadConfig
-from nexus_server.protocol import DeviceType
+from nexus_server.protocol import MAX_PLAYERS, Button, DeviceType
+
+
+@pytest.fixture(autouse=True)
+def no_real_firewall_calls(monkeypatch):
+    """Keep the suite off the machine it runs on.
+
+    ``firewall_status`` shells out to netsh and PowerShell; left alone, tests
+    about something else entirely would spawn processes, take seconds, and give
+    different answers on different machines. ``tests/test_system.py`` is where
+    those functions are actually exercised, against fake output.
+    """
+    monkeypatch.setattr("nexus_server.system.firewall_rules_present", lambda *a: None)
+    monkeypatch.setattr("nexus_server.system.third_party_firewalls", lambda: [])
+    monkeypatch.setattr("nexus_server.system.active_network_categories", lambda: {})
+    monkeypatch.setattr("nexus_server.system.network_category_for", lambda ip: None)
 
 
 @pytest.fixture()
@@ -22,6 +39,155 @@ def api(tmp_path, monkeypatch):
     instance.settings.discovery_enabled = False
     yield instance
     instance.shutdown()
+
+
+@pytest.fixture()
+def api_with_desktop(tmp_path, monkeypatch):
+    """An API whose desktop control has a real (recording) backend behind it."""
+    monkeypatch.setenv("NEXUS_CONFIG_DIR", str(tmp_path))
+    backend = FakeDesktop()
+    monkeypatch.setattr("nexus_server.app.create_backend", lambda: backend)
+    instance = Api(FakeBackend(), simulated=True)
+    instance.settings.manage_firewall = False
+    instance.settings.manage_adb = False
+    instance.settings.discovery_enabled = False
+    yield instance, backend
+    instance.shutdown()
+
+
+def _hold_a_bound_key(api, desktop, slot: int = 0) -> None:
+    """Put slot ``slot`` in the state of holding a bound key down."""
+    session = api.server.slots.sessions[slot]
+    session.keys.set_bindings({"a": "space"})
+    for key, pressed in session.keys.update(int(Button.SOUTH), 0):
+        desktop.set_key(key, pressed)
+    assert desktop.keys["space"] is True
+
+
+class TestDesktopGate:
+    """The gate moving must let go of whatever the old slot was holding.
+
+    Both of these go through the dashboard API rather than the server method it
+    delegates to: the wiring is the part that was missing, so it is the part
+    worth guarding.
+    """
+
+    def test_moving_the_lock_to_another_slot_releases_held_input(self, api_with_desktop):
+        api, desktop = api_with_desktop
+        api.set_desktop_control(True)
+        _hold_a_bound_key(api, desktop)
+
+        api.set_desktop_slot(1)
+
+        assert desktop.keys["space"] is False
+        assert api.server.slots.sessions[0].keys.release() == []
+
+    def test_disabling_desktop_control_releases_held_input(self, api_with_desktop):
+        api, desktop = api_with_desktop
+        api.set_desktop_control(True)
+        _hold_a_bound_key(api, desktop)
+
+        api.set_desktop_control(False)
+
+        assert desktop.keys["space"] is False
+        assert api.server.slots.sessions[0].keys.release() == []
+
+
+class TestFirewallOffer:
+    def test_status_reports_what_the_banner_needs(self, api, monkeypatch):
+        monkeypatch.setattr("nexus_server.system.firewall_rules_present", lambda *a: False)
+        status = api.firewall_status()
+        assert status["open"] is False
+        assert status["tcp"] == api.settings.port
+        assert status["udp"] == api.settings.discovery_port
+        assert "admin" in status and "windows" in status
+
+    def test_the_check_is_cached(self, api, monkeypatch):
+        """Two netsh calls per dashboard poll would be absurd."""
+        calls = []
+        monkeypatch.setattr(
+            "nexus_server.system.firewall_rules_present",
+            lambda *a: calls.append(a) or True,
+        )
+        api.firewall_status()
+        api.firewall_status()
+        assert len(calls) == 1
+
+    def test_success_is_reported_only_once_the_rules_exist(self, api, monkeypatch):
+        """ShellExecute returning is not an outcome — the rules appearing is.
+
+        Reporting the launch as success is what made a blocked attempt look like
+        a button that did nothing.
+        """
+        monkeypatch.setattr("nexus_server.app.FIREWALL_VERIFY_SECONDS", 0.5)
+        monkeypatch.setattr(
+            "nexus_server.system.open_firewall_elevated",
+            lambda *a, **k: system.StepResult(True, "launched"),
+        )
+        monkeypatch.setattr("nexus_server.system.firewall_rules_present", lambda *a: False)
+        monkeypatch.setattr("nexus_server.system.third_party_firewalls", lambda: [])
+        monkeypatch.setattr("nexus_server.system.active_network_categories", lambda: {})
+        monkeypatch.setattr("nexus_server.system.network_category_for", lambda ip: None)
+
+        result = api.open_firewall()
+        assert result["ok"] is False
+        assert "not added" in result["message"]
+        assert "add_firewall_rule.bat" in result["message"]
+
+    def test_rules_for_the_wrong_profile_are_not_called_missing(self, api, monkeypatch):
+        """They were added; they just do not cover the network this PC is on.
+
+        Reporting "the elevated command did not run" sent the user hunting for a
+        failure that had not happened, while the actual fix — one more button —
+        went unmentioned.
+        """
+        monkeypatch.setattr("nexus_server.app.FIREWALL_VERIFY_SECONDS", 0.3)
+        monkeypatch.setattr(
+            "nexus_server.system.open_firewall_elevated",
+            lambda *a, **k: system.StepResult(True, "launched"),
+        )
+        monkeypatch.setattr("nexus_server.system.network_category_for", lambda ip: "Public")
+        monkeypatch.setattr(
+            "nexus_server.system.firewall_rules_present",
+            lambda tcp, udp, profile="private": profile == "private",
+        )
+
+        result = api.open_firewall()
+        assert result["ok"] is False
+        assert "only for private networks" in result["message"]
+        assert "did not run" not in result["message"]
+
+    def test_a_third_party_firewall_is_named_in_the_result(self, api, monkeypatch):
+        """Opening the Windows port is not enough when ESET filters too."""
+        monkeypatch.setattr("nexus_server.app.FIREWALL_VERIFY_SECONDS", 0.5)
+        monkeypatch.setattr(
+            "nexus_server.system.open_firewall_elevated",
+            lambda *a, **k: system.StepResult(True, "launched"),
+        )
+        monkeypatch.setattr("nexus_server.system.firewall_rules_present", lambda *a: True)
+        monkeypatch.setattr("nexus_server.system.third_party_firewalls", lambda: ["ESET Zapora"])
+        monkeypatch.setattr("nexus_server.system.active_network_categories", lambda: {})
+        monkeypatch.setattr("nexus_server.system.network_category_for", lambda ip: None)
+
+        result = api.open_firewall()
+        assert result["ok"] is True
+        assert "ESET Zapora" in result["message"]
+
+    def test_opening_invalidates_the_cache(self, api, monkeypatch):
+        """Otherwise the banner would insist the port is shut for another 15 s."""
+        monkeypatch.setattr("nexus_server.system.firewall_rules_present", lambda *a: False)
+        monkeypatch.setattr("nexus_server.system.third_party_firewalls", lambda: [])
+        monkeypatch.setattr("nexus_server.system.active_network_categories", lambda: {})
+        monkeypatch.setattr("nexus_server.system.network_category_for", lambda ip: None)
+        api.firewall_status()
+
+        monkeypatch.setattr(
+            "nexus_server.system.open_firewall_elevated",
+            lambda *a, **k: system.StepResult(True, "opening"),
+        )
+        monkeypatch.setattr("nexus_server.system.firewall_rules_present", lambda *a: True)
+        assert api.open_firewall()["ok"] is True
+        assert api.firewall_status()["open"] is True
 
 
 class TestState:
@@ -42,7 +208,7 @@ class TestState:
 
     def test_players_are_reported_even_when_empty(self, api):
         players = api.get_state()["players"]
-        assert len(players) == 4
+        assert len(players) == MAX_PLAYERS
         assert all(p["connected"] is False and p["config"] is None for p in players)
 
 
@@ -165,7 +331,7 @@ class TestSettingsApi:
         assert api.store.load().haptics is False
 
     def test_desktop_slot_is_clamped(self, api):
-        assert api.set_desktop_slot(99) == 3
+        assert api.set_desktop_slot(99) == MAX_PLAYERS - 1
         assert api.set_desktop_slot(-4) == 0
 
     def test_key_bind_round_trip(self, api):
