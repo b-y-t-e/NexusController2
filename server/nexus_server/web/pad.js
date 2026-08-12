@@ -49,6 +49,11 @@ function padLabel(type, id, fallback) {
  * @param visuals    live input state, or null for a static preview
  * @param options    {interactive, selected, onSelect, onMove}
  */
+/** Class per component shape; the default is a circle. */
+const SHAPE_CLASS = { pad: ' square', bar: ' bar' };
+/** A Buzz answer bar stands upright: a third as wide as it is tall. */
+const BAR_ASPECT = 1 / 3;
+
 function renderPad(host, config, components, visuals, options) {
   const opts = options || {};
   const layout = (config && config.layout) || {};
@@ -63,7 +68,7 @@ function renderPad(host, config, components, visuals, options) {
     nodes = {};
     components.forEach((component) => {
       const node = document.createElement('div');
-      node.className = 'pad-part' + (component.shape === 'pad' ? ' square' : '');
+      node.className = 'pad-part' + (SHAPE_CLASS[component.shape] || '');
       node.dataset.id = component.id;
       node.innerHTML = '<span></span>';
       if (opts.interactive) attachDrag(node, component, host, opts);
@@ -79,7 +84,9 @@ function renderPad(host, config, components, visuals, options) {
     const place = layout[component.id] || { x: 0.5, y: 0.5, s: 1, r: 0 };
     const size = component.size * (place.s || 1) * height;
 
-    node.style.width = size + 'px';
+    // An upright bar, matching the phone. The preview has to draw the pad the
+    // phone draws, or the designer lies about it.
+    node.style.width = (component.shape === 'bar' ? size * BAR_ASPECT : size) + 'px';
     node.style.height = size + 'px';
     node.style.left = (place.x * 100) + '%';
     node.style.top = (place.y * 100) + '%';

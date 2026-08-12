@@ -30,6 +30,12 @@
   <button class="btn btn-sm" id="driver-install">Install driver</button>
 </div>
 
+<div class="banner hidden" id="firewall-banner">
+  <span id="firewall-text">Windows Firewall is blocking the Wi-Fi port, so phones cannot reach this PC. </span>
+  <button class="btn btn-sm" id="firewall-open">Open port</button>
+  <button class="btn btn-sm btn-ghost hidden" id="firewall-open-public">Include public networks</button>
+</div>
+
 <div class="banner hidden" id="xinput-banner"></div>
 
 <main class="layout">
@@ -90,19 +96,19 @@
 
       <div class="card security">
         <div class="card-head"><h2>Desktop control</h2></div>
-        <p class="muted small">Lets the selected player move the mouse and type on this PC. Off by default.</p>
+        <p class="muted small">Remote mouse and keyboard for one player. Off by default.</p>
         <label class="switch">
           <input type="checkbox" id="desktop-toggle">
           <span>Allow mouse &amp; keyboard</span>
         </label>
+        <!-- One line, not the paragraph that used to sit above the switch: the
+             control already says what it does. What it cannot say is that this
+             is remote keyboard access, and that has to be readable *before*
+             anyone turns it on, not only in the warning that follows. -->
         <label class="field">
           <span>Controlled by</span>
-          <select id="desktop-slot">
-            <option value="0">Player 1</option>
-            <option value="1">Player 2</option>
-            <option value="2">Player 3</option>
-            <option value="3">Player 4</option>
-          </select>
+          <!-- Filled from the server's slot count; see renderDesktopSlots(). -->
+          <select id="desktop-slot"></select>
         </label>
         <p class="warn hidden" id="desktop-warning">Anyone holding the pairing token can control this PC while this is on.</p>
         <label class="switch">

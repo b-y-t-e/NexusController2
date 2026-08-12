@@ -224,43 +224,148 @@ body.running .status-text { color: var(--accent); text-shadow: 0 0 18px var(--ac
 .check, .switch { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
 .check input, .switch input { accent-color: var(--accent); width: 15px; height: 15px; }
 
-/* --- players --- */
+/* --- players: a rack of numbered bays ---
+   Slot identity is the whole point of this panel, so every bay keeps its place
+   and its number whatever happens. An occupied bay lights its rail and opens up
+   to show the pad; a free one collapses to a single quiet line, which is what
+   makes two players in an eight-slot rack readable at a glance. */
 .players { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.player-list { display: flex; flex-direction: column; gap: 9px; overflow-y: auto; padding-right: 4px; }
-.player {
-  display: grid;
-  grid-template-columns: 62px 1fr auto;
-  gap: 12px;
+.player-list { display: flex; flex-direction: column; gap: 5px; overflow-y: auto; padding-right: 4px; }
+
+.bay {
+  display: flex;
+  /* flex: none, because the rack lives in a scrolling column: without it the
+     bays are squeezed to fit the panel and the name row is the first thing to
+     be crushed out of existence. They keep their height and the list scrolls. */
+  flex: none;
   align-items: center;
-  border: 1px solid var(--line);
+  gap: 12px;
+  padding: 5px 11px 5px 0;
+  border: 1px solid transparent;
   border-radius: 8px;
-  padding: 9px 11px;
-  background: var(--panel-2);
-  opacity: .5;
-}
-.player.on { opacity: 1; border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
-.stickpad {
-  width: 62px; height: 42px;
-  background: #05080c;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  background: transparent;
   position: relative;
   overflow: hidden;
+  transition: background .18s, border-color .18s;
 }
-.stick { position: absolute; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); transform: translate(-50%,-50%); transition: left .06s linear, top .06s linear; }
-.stick.r { background: color-mix(in srgb, var(--accent) 55%, white); }
-.player-name { font-weight: 600; font-size: 13px; }
-.player-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 2px; }
-.trigbars { display: flex; gap: 4px; margin-top: 5px; }
-.trigbar { height: 3px; flex: 1; background: #05080c; border-radius: 2px; overflow: hidden; }
-.trigbar i { display: block; height: 100%; width: 0; background: var(--accent); }
-.dtype { font-family: var(--mono); font-size: 10px; color: var(--accent); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+/* The rail: the one piece of colour that says "somebody is here". */
+.bay::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--line);
+  transition: background .18s, box-shadow .18s;
+}
+.bay.on {
+  background: var(--panel-2);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  padding: 7px 11px 7px 0;
+}
+.bay.on::before { background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+.bay.joining::before { background: #fbbf24; }
 
-/* --- graph --- */
-.graph canvas { width: 100%; display: block; }
+/* Tabular so the numbers form a column, which is what a rack looks like. */
+.bay-no {
+  flex: none;
+  width: 34px;
+  text-align: center;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--line);
+  transition: color .18s;
+}
+.bay.on .bay-no { color: var(--accent); }
+.bay.joining .bay-no { color: #fbbf24; }
+
+.bay-body { flex: 1; min-width: 0; }
+.bay-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.bay-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bay.on .bay-name { color: var(--text); }
+.bay.joining .bay-name { color: #fbbf24; }
+.bay-meta {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bay-meta:empty { display: none; }
+.bay-uptime {
+  flex: none;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  min-width: 62px;
+}
+.bay-actions { display: flex; gap: 6px; flex: none; }
+
+/* Everything that only means something for a live pad. Hidden rather than
+   removed, so a bay filling up does not reflow the rack under the cursor. */
+.bay:not(.on) .bay-live { display: none; }
+
+/* The two triggers, the only analogue controls a pad thumbnail cannot show
+   convincingly. Fixed width so they read as gauges rather than as a rule under
+   the text, and labelled, because an unlabelled bar is a mystery. */
+.trigbars { display: flex; gap: 10px; margin-top: 7px; }
+.trigbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 96px;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--muted);
+}
+.trigbar::before { content: attr(data-label); }
+.trigbar span {
+  flex: 1;
+  height: 4px;
+  background: #05080c;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.trigbar i { display: block; height: 100%; width: 0; background: var(--accent); }
+.bay-warn { color: #fbbf24; }
+
+.dtype, .xtag {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+.dtype { color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+/* The number the *game* uses. Deliberately not accent-coloured: it is a fact
+   about Windows, not about this slot, and the two are easy to confuse. */
+.xtag { color: var(--muted); border: 1px solid var(--line); cursor: help; }
+
+}
+
+/* --- graph ---
+   A fixed, deliberately short canvas. Left to stretch it matched the height of
+   the settings card beside it and became the largest thing on the page, which
+   is a lot of room for one number that is only ever ambient. */
+.graph canvas { width: 100%; height: 84px; display: block; }
+.row-2 { align-items: start; }
 
 /* --- log --- */
-.log { height: 132px; display: flex; flex-direction: column; }
+.log { height: 92px; display: flex; flex-direction: column; }
 .log-body {
   flex: 1;
   overflow-y: auto;
@@ -355,6 +460,8 @@ body.running .status-text { color: var(--accent); text-shadow: 0 0 18px var(--ac
   transition: border-color .12s, color .12s, background .12s;
 }
 .pad-part.square { border-radius: 22%; }
+/* The Buzz answer button: an upright bar with fully rounded ends. */
+.pad-part.bar { border-radius: 50%/16%; }
 .pad-part span { pointer-events: none; transition: transform .05s linear; }
 .pad-part.active {
   border-color: var(--part-color);
@@ -372,15 +479,27 @@ body.running .status-text { color: var(--accent); text-shadow: 0 0 18px var(--ac
 
 .pad-mini {
   position: relative;
-  width: 116px;
-  height: 62px;
+  width: 168px;
+  height: 84px;
   background: #05080c;
   border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
   flex: none;
 }
-.pad-mini .pad-part { border-width: 1px; }
+/* Idle parts need to be *visible* at thumbnail size, not merely present: with
+   the panel border colour they dissolved into the background and the pad read as
+   scattered marks. A touch of fill and a lighter edge give it a silhouette, and
+   an active control still stands out because it lights up in the accent. */
+.pad-mini .pad-part {
+  border-width: 1px;
+  border-color: rgba(255,255,255,.20);
+  background: rgba(255,255,255,.05);
+}
+/* No labels at this size: the text renders at two or three pixels and turns the
+   thumbnail into grey mush. The shapes and their positions are the information
+   here — which control lit up, and where the sticks are pointing. */
+.pad-mini .pad-part span { display: none; }
 .pad-mini-empty {
   display: flex; align-items: center; justify-content: center;
   height: 100%; font-size: 10px; color: var(--muted); font-family: var(--mono);
@@ -453,3 +572,19 @@ body.running .status-text { color: var(--accent); text-shadow: 0 0 18px var(--ac
 
 #driver-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 #driver-banner .btn { border-color: rgba(251,191,36,.5); color: #fbbf24; padding: 4px 10px; font-size: 12px; }
+
+/* The window opens at 1080x780 and may be dragged down to 900x640, so the bay
+   has to survive losing a third of its width. Things go in order of how much
+   they earn their space: the time connected first, then the thumbnail shrinks —
+   it is drawn from fractions, so it stays correct at any size — and the name,
+   the slot number and the controls never go. */
+@media (max-width: 1120px) {
+  .bay-uptime { display: none; }
+  .pad-mini { width: 132px; height: 60px; }
+  .layout { grid-template-columns: 264px 1fr; }
+  .row-2 { grid-template-columns: 1fr 250px; }
+}
+@media (max-width: 960px) {
+  .pad-mini { width: 104px; height: 52px; }
+  .bay-no { width: 26px; font-size: 15px; }
+  .trigbars { display: none; }
