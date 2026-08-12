@@ -389,6 +389,30 @@ object QrPayload {
         return null
     }
 
+    /**
+     * The target to dial for [raw], filling in a token this phone already kept.
+     *
+     * [raw] is a QR payload or a bare address — the two ways a server is named:
+     * scanned from the screen, or found on the network and tapped. A scan gives
+     * an address and nothing more, because §8 keeps the token out of the
+     * discovery reply, which answers anyone who asks. So the token comes from
+     * whatever pairing stored for that host, looked up through [tokenFor], and
+     * the first connection to a server nobody has paired with carries none at
+     * all — a refusal the user is meant to see, since the QR code is the only
+     * place a token comes from.
+     *
+     * A token *in* the payload always wins: rescanning the code is how a phone
+     * is re-paired after the PC issues a new one, and deferring to the stored
+     * copy there would make the new code impossible to use.
+     *
+     * Returns null when [raw] names nothing valid; callers must say so rather
+     * than dial.
+     */
+    fun targetFor(raw: String?, tokenFor: (String) -> String): ConnectionTarget? {
+        val parsed = parse(raw) ?: return null
+        return if (parsed.token.isEmpty()) parsed.copy(token = tokenFor(parsed.ip)) else parsed
+    }
+
     fun isIpv4(value: String): Boolean {
         val m = IPV4.matchEntire(value) ?: return false
         return (1..4).all { i ->

@@ -716,6 +716,52 @@ class TestDiscovery:
         assert response.port == discovery_server.settings.port
         assert response.token_required is True
 
+    def test_the_reply_never_carries_the_token(self, discovery_server):
+        """Discovery answers anybody who asks, so it must give nothing away.
+
+        The probe is an unauthenticated UDP broadcast: every device on the
+        network — the neighbour sharing the Wi-Fi included — can send one and
+        read the answer. Putting the pairing token in that reply would hand it to
+        all of them and make pairing decoration. The reply says *whether* a token
+        is needed, never what it is; the token travels in the QR code alone (§8).
+        """
+        token = discovery_server.settings.token
+        assert token, "the fixture is supposed to have pairing on"
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(3)
+        try:
+            sock.sendto(
+                P.DISCOVERY_REQUEST,
+                ("127.0.0.1", discovery_server.settings.discovery_port),
+            )
+            data, _ = sock.recvfrom(512)
+        finally:
+            sock.close()
+
+        assert token.encode() not in data
+        assert P.DiscoveryResponse.decode(data).token_required is True
+
+    def test_a_phone_that_only_scanned_is_refused_until_it_pairs(self, discovery_server):
+        """The whole point of the flag the reply *does* carry.
+
+        A server found by scanning gives the phone an address and nothing else,
+        so the first connection it can make is one with an empty token — and it
+        has to be refused, or the QR code would be securing nothing. Once paired,
+        the phone dials the same address with the token it kept, and is let in.
+        """
+        with Client(discovery_server, token="") as unpaired:
+            assert unpaired.hello() == P.encode_reject(RejectReason.BAD_TOKEN)
+
+        with Client(discovery_server) as paired:
+            assert paired.hello()[0] == P.ServerOpcode.WELCOME
+
+    def test_with_pairing_off_the_scan_alone_is_enough(self, discovery_server):
+        """And then the reply says so, so the phone can stop asking for a code."""
+        discovery_server.settings.require_token = False
+        with Client(discovery_server, token="") as scanned:
+            assert scanned.hello()[0] == P.ServerOpcode.WELCOME
+
     def test_ignores_unrelated_datagrams(self, discovery_server):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(0.4)

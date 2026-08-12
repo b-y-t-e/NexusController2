@@ -702,13 +702,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun tokenFor(ip: String): String = prefs.getString("token_$ip", "") ?: ""
 
     /**
-     * Validates user/QR input and fills in a previously stored token for that host.
+     * Validates user/QR/scan input and fills in a token kept from an earlier pairing.
      * Returns null when the input is neither a `NEXUSPAD2:` payload nor a bare IPv4.
+     * The rule itself lives in [QrPayload.targetFor], where it can be tested.
      */
-    private fun resolveTarget(raw: String): ConnectionTarget? {
-        val parsed = QrPayload.parse(raw) ?: return null
-        return if (parsed.token.isEmpty()) parsed.copy(token = tokenFor(parsed.ip)) else parsed
-    }
+    private fun resolveTarget(raw: String): ConnectionTarget? =
+        QrPayload.targetFor(raw, ::tokenFor)
 
     /**
      * Turns a socket exception into something worth reading.
