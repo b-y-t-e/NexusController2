@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The window behind the app.
+
+  It used to be Android's stock *light* theme, so every strip the app did not
+  paint itself came out white — most visibly the status bar area at the top of a
+  pad that is otherwise almost black. Nothing here styles widgets: the whole UI
+  is Compose. This only decides what is underneath it.
+-->
+<resources>
+    <style name="Theme.NexusController" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:navigationBarColor">@color/window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+    </style>
+</resources>

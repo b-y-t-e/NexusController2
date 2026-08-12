@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -103,12 +104,12 @@ fun LayoutEditorScreen(
                 modifier = Modifier.size(48.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.Close, "Cancel", tint = textColor)
+                    Icon(Icons.Default.Close, stringResource(R.string.action_cancel), tint = textColor)
                 }
             }
 
             Text(
-                "Layout Editor", 
+                stringResource(R.string.editor_title), 
                 color = textColor, 
                 fontWeight = FontWeight.Bold, 
                 fontSize = 18.sp
@@ -142,7 +143,7 @@ fun LayoutEditorScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("SIZE", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.editor_size), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.width(16.dp))
                     Slider(
                         value = configs[selectedId!!]?.scale ?: 1f,
@@ -192,10 +193,12 @@ fun RenderComponentShape(
         id == "SHARE" || id == "OPTIONS" ->
             PSCenterButton(Glyphs.center(controllerType, id), Modifier, bg, 0, false, isGuide = false, onVibrate = {}) { _, _ -> }
         id == "PS" -> PSCenterButton("PS", Modifier, bg, 0, false, isGuide = true, onVibrate = {}) { _, _ -> }
-        id == "BUZZ_RED" -> BuzzBuzzerButton({}) { _, _ -> }
+        id == "BUZZ_RED" -> BuzzBuzzerButton(stringResource(R.string.buzz_dome), {}) { _, _ -> }
         id.startsWith("BUZZ_") -> {
             val spec = BuzzAnswerSpec.forId(id)
-            if (spec != null) BuzzAnswerButton(spec.label, spec.color, spec.mask, {}) { _, _ -> }
+            if (spec != null) {
+                BuzzAnswerButton(stringResource(spec.labelRes), spec.color, spec.mask, {}) { _, _ -> }
+            }
         }
         id.startsWith("BTN_") ->
             PSCenterButton("BTN", Modifier, bg, 0, false, isGuide = false, onVibrate = {}) { _, _ -> }

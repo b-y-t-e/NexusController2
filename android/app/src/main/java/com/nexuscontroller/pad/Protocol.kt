@@ -1,5 +1,7 @@
 package com.nexuscontroller.pad
 
+import androidx.annotation.StringRes
+
 /**
  * Nexus Controller wire protocol, version 2.
  *
@@ -14,12 +16,33 @@ package com.nexuscontroller.pad
 enum class ControllerType(val wire: Int, val label: String) {
     XBOX360(0x00, "Xbox 360"),
     DUALSHOCK4(0x01, "DualShock 4"),
-    BUZZ(0x02, "Buzz");
+    BUZZ(0x02, "Buzz"),
 
-    /** Xbox and DualShock share the on-screen gamepad; Buzz has its own layout family. */
+    /**
+     * A DualShock 3 face: SELECT and START rather than SHARE and OPTIONS.
+     *
+     * On the wire it *is* a DualShock 4 — ViGEmBus has no DS3 target, and RPCS3
+     * reads a DS4 and maps it onto the PS3 pad itself, so emulating one would buy
+     * nothing. What differs is the phone: the labels on the pad you are holding.
+     */
+    DUALSHOCK3(0x01, "DualShock 3");
+
+    /** Xbox and both DualShocks share the on-screen gamepad; Buzz has its own family. */
     val isGamepad: Boolean get() = this != BUZZ
 
+    /** PlayStation faces: crosses and circles rather than letters. */
+    val isPlayStation: Boolean get() = this == DUALSHOCK4 || this == DUALSHOCK3
+
     companion object {
+        /**
+         * The order to *offer* them in, which is not the order they are declared
+         * in: declaration puts the real devices first so [fromWire] resolves to
+         * one, while a person picking a pad expects the two PlayStation faces
+         * next to each other.
+         */
+        val choices: List<ControllerType> = listOf(XBOX360, DUALSHOCK4, DUALSHOCK3, BUZZ)
+
+        /** The type a wire value denotes. Ambiguity resolves to the real device. */
         fun fromWire(v: Int): ControllerType? = entries.firstOrNull { it.wire == v }
 
         /** Tolerant lookup used for the `controller_type` preference. */
@@ -28,20 +51,24 @@ enum class ControllerType(val wire: Int, val label: String) {
     }
 }
 
-/** Why the server refused the handshake. */
-enum class RejectReason(val code: Int, val message: String) {
-    UNSUPPORTED_VERSION(0x01, "Server speaks a different protocol version. Update the PC app."),
-    INVALID_TOKEN(0x02, "Invalid pairing code — scan the QR code again."),
-    SERVER_FULL(0x03, "Server full (4/4). Disconnect another pad first."),
-    MALFORMED_HANDSHAKE(0x04, "Server rejected the handshake (malformed request)."),
-    UNAUTHENTICATED(0x05, "Server rejected the handshake (not authenticated)."),
-    RATE_LIMITED(0x06, "Too many failed attempts. Wait a minute and try again.");
+/**
+ * Why the server refused the handshake.
+ *
+ * Carries a string *resource*, not a sentence: these are the messages a user is
+ * most likely to read at the worst moment, and they were the one part of the app
+ * that stayed English on a Polish phone. Resolving them needs a Context, which
+ * the UI has and this pure file deliberately does not.
+ */
+enum class RejectReason(val code: Int, @StringRes val messageRes: Int) {
+    UNSUPPORTED_VERSION(0x01, R.string.reject_version),
+    INVALID_TOKEN(0x02, R.string.reject_token),
+    SERVER_FULL(0x03, R.string.reject_full),
+    MALFORMED_HANDSHAKE(0x04, R.string.reject_malformed),
+    UNAUTHENTICATED(0x05, R.string.reject_unauthenticated),
+    RATE_LIMITED(0x06, R.string.reject_rate_limited);
 
     companion object {
         fun fromCode(code: Int): RejectReason? = entries.firstOrNull { it.code == code }
-
-        fun messageFor(code: Int): String =
-            fromCode(code)?.message ?: "Connection refused by the server (code 0x%02X).".format(code)
     }
 }
 
@@ -322,7 +349,9 @@ object Protocol {
 object QrPayload {
 
     private val IPV4 = Regex("""^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$""")
-    private val TOKEN = Regex("""^[0-9a-fA-F]{1,64}$""")
+    // Empty is legal and means the server has pairing turned off (§8) — the QR code
+    // it shows then really does end in a bare colon.
+    private val TOKEN = Regex("""^[0-9a-fA-F]{0,64}$""")
 
     /**
      * Accepts `NEXUSPAD2:<ip>:<port>:<token>` or a bare IPv4 address.

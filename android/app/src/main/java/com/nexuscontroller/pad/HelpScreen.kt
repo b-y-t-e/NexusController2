@@ -27,6 +27,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
@@ -107,41 +108,48 @@ fun HelpScreen(onBack: () -> Unit, themeMode: String) {
     
     // We construct items properly inside or passed in, but strictly the icon colors need to match theme.
     // Ideally we should pass simple enums or types, but for now we'll dynamically set them here
+    // Content comes from resources, and says what this app actually does: the
+    // originals advised opening "Port 8080" and lowering a "Streaming Quality"
+    // setting, neither of which exists here.
     val faqItems = listOf(
         FAQItemData(
-            title = "PC not found",
-            subtitle = "App cannot discover the host computer",
+            title = stringResource(R.string.help_notfound_title),
+            subtitle = stringResource(R.string.help_notfound_subtitle),
             icon = Icons.Rounded.WifiOff,
             iconColor = colors.iconRed,
             iconBg = colors.bgRed,
             steps = listOf(
-                FAQStep("Ensure the PC Client is running and \"Server Status\" is Green.", "PC Client"),
-                FAQStep("Verify both devices are connected to the same Wi-Fi network.", "same Wi-Fi network"),
-                FAQStep("Check Windows Firewall settings to allow connections on Port 8080.", "Port 8080")
+                FAQStep(stringResource(R.string.help_notfound_1)),
+                FAQStep(stringResource(R.string.help_notfound_2)),
+                FAQStep(stringResource(R.string.help_notfound_3)),
+                FAQStep(stringResource(R.string.help_notfound_4)),
+                FAQStep(stringResource(R.string.help_notfound_5)),
+                FAQStep(stringResource(R.string.help_notfound_6))
             )
         ),
         FAQItemData(
-            title = "High latency / Lag",
-            subtitle = "Input delay or video stuttering",
+            title = stringResource(R.string.help_lag_title),
+            subtitle = stringResource(R.string.help_lag_subtitle),
             icon = Icons.Rounded.Speed,
             iconColor = colors.iconAmber,
             iconBg = colors.bgAmber,
             steps = listOf(
-                FAQStep("Switch to a 5GHz Wi-Fi network. 2.4GHz is often too crowded.", "5GHz Wi-Fi"),
-                FAQStep("Lower the Streaming Quality or Bitrate in App Settings.", "Streaming Quality"),
-                FAQStep("Close bandwidth-heavy applications (downloads, streaming) on your PC.")
+                FAQStep(stringResource(R.string.help_lag_1)),
+                FAQStep(stringResource(R.string.help_lag_2)),
+                FAQStep(stringResource(R.string.help_lag_3))
             )
         ),
         FAQItemData(
-            title = "Buttons not responding",
-            subtitle = "Inputs are not registering in game",
+            title = stringResource(R.string.help_buttons_title),
+            subtitle = stringResource(R.string.help_buttons_subtitle),
             icon = Icons.Rounded.Gamepad,
             iconColor = colors.iconBlue,
             iconBg = colors.bgBlue,
             steps = listOf(
-                FAQStep("Ensure the game window is active (focused) on your PC.", "active"),
-                FAQStep("Check if the game supports standard XInput controllers."),
-                FAQStep("Restart the PC Client to refresh the virtual controller driver.")
+                FAQStep(stringResource(R.string.help_buttons_1)),
+                FAQStep(stringResource(R.string.help_buttons_2)),
+                FAQStep(stringResource(R.string.help_buttons_3)),
+                FAQStep(stringResource(R.string.help_buttons_4))
             )
         )
     )
@@ -177,7 +185,7 @@ fun HelpScreen(onBack: () -> Unit, themeMode: String) {
                              .size(40.dp)
                              .background(Color.Transparent, CircleShape)
                      ) {
-                         Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = colors.textSecondary)
+                         Icon(Icons.Rounded.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = colors.textSecondary)
                      }
                      
                      Column(
@@ -185,14 +193,14 @@ fun HelpScreen(onBack: () -> Unit, themeMode: String) {
                          horizontalAlignment = Alignment.CenterHorizontally
                      ) {
                          Text(
-                             "Troubleshooting & FAQ",
+                             stringResource(R.string.help_title),
                              color = colors.textPrimary,
                              fontSize = 18.sp,
                              fontWeight = FontWeight.Bold,
                              letterSpacing = (-0.5).sp
                          )
                          Text(
-                             "Common issues and solutions",
+                             stringResource(R.string.help_subtitle),
                              color = colors.textSecondary,
                              fontSize = 12.sp
                          )
@@ -244,28 +252,19 @@ fun HelpScreen(onBack: () -> Unit, themeMode: String) {
             ) {
                 Column(modifier = Modifier.weight(1f).displayCutoutPadding()) {
                     Text(
-                        "Still stuck?",
+                        stringResource(R.string.help_stuck_title),
                         color = colors.textPrimary,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold
                     )
+                    // Points at the log on the PC. The button here used to say
+                    // "Contact Support" and its onClick was a TODO — a promise of
+                    // a support team that does not exist.
                     Text(
-                        "Our support team is ready to assist you.",
+                        stringResource(R.string.help_stuck_body),
                         color = colors.textSecondary,
                         fontSize = 12.sp
                     )
-                }
-                
-                Button(
-                    onClick = { /* TODO: Support Link */ },
-                    colors = ButtonDefaults.buttonColors(containerColor = colors.primary),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp),
-                    modifier = Modifier.height(48.dp)
-                ) {
-                    Icon(Icons.Rounded.SupportAgent, null, modifier = Modifier.size(20.dp), tint = Color.White)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Contact Support", fontWeight = FontWeight.Bold, color = Color.White)
                 }
             }
         }

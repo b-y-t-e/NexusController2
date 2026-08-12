@@ -69,11 +69,22 @@ class ConfigDocumentTest {
     }
 
     @Test
-    fun `every controller type round trips by name`() {
-        ControllerType.entries.forEach { type ->
-            val encoded = ConfigCodec.encode(ConfigDocument(type = type))
-            assertEquals(type, ConfigCodec.parse(encoded)?.type)
-        }
+    fun `every device type round trips by name`() {
+        listOf(ControllerType.XBOX360, ControllerType.DUALSHOCK4, ControllerType.BUZZ)
+            .forEach { type ->
+                val encoded = ConfigCodec.encode(ConfigDocument(type = type))
+                assertEquals(type, ConfigCodec.parse(encoded)?.type)
+            }
+    }
+
+    @Test
+    fun `a DualShock 3 is described to the PC as a DualShock 4`() {
+        // The document describes the *device* the PC emulates. A name it has
+        // never heard of would cost the whole document, and there is no DS3
+        // device to describe — only a differently labelled phone.
+        val encoded = ConfigCodec.encode(ConfigDocument(type = ControllerType.DUALSHOCK3))
+        assertTrue(encoded.contains("DUALSHOCK4"))
+        assertEquals(ControllerType.DUALSHOCK4, ConfigCodec.parse(encoded)?.type)
     }
 
     @Test

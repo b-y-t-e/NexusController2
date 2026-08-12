@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  User-facing text, English (the fallback for every language).
+
+  Kept as resources rather than literals in the composables so Android can pick
+  the translation from the phone's own language setting — there is no language
+  switch in the app, and there should not be one: the phone already knows.
+
+  Ids are named after what the string *is*, not where it happens to appear, so
+  moving a screen around does not turn every id into a lie.
+-->
+<resources>
+    <string name="app_name">Nexus Controller</string>
+
+    <!-- First run -->
+    <string name="first_run_title">Choose your pad</string>
+    <string name="first_run_subtitle">You can change this later in the menu.</string>
+    <string name="pad_xbox_summary">Works with everything</string>
+    <string name="pad_ds4_summary">For PlayStation games</string>
+    <string name="pad_buzz_summary">Quiz buzzer</string>
+
+    <!-- Modes -->
+    <string name="mode_play">PLAY</string>
+    <string name="mode_edit">EDIT</string>
+    <string name="mode_save">SAVE</string>
+    <string name="mode_connect">CONNECT</string>
+
+    <!-- Sidebar -->
+    <string name="section_modes">MODES</string>
+    <string name="section_controller">CONTROLLER</string>
+    <string name="section_system">SYSTEM</string>
+    <string name="mode_gamepad">Gamepad Mode</string>
+    <string name="mode_trackpad">Trackpad Mode</string>
+    <string name="mode_racing">Racing Wheel</string>
+    <string name="mode_layouts">Custom Layouts</string>
+    <string name="mode_gamepad_hint">%1$s layout</string>
+    <string name="mode_trackpad_hint">Mouse &amp; Keyboard</string>
+    <string name="mode_racing_hint">Gyro Steering</string>
+    <string name="mode_layouts_hint">Saved Profiles</string>
+    <string name="action_settings">Settings</string>
+    <string name="action_about">About</string>
+    <string name="action_help">Help</string>
+    <string name="action_connect_pc">Connect to PC</string>
+    <string name="action_disconnect_pc">Disconnect PC</string>
+
+    <!-- Connection -->
+    <string name="connect_qr">QR SCAN</string>
+    <string name="connect_usb">USB</string>
+    <string name="connect_manual">Enter IP address</string>
+    <string name="connect_connected">Connected as player %1$d</string>
+
+    <!-- Errors and notices, phrased as what to do next -->
+    <string name="error_no_pc">Can\'t find PC. Check the server is running and the port is open.</string>
+    <string name="error_refused">Server refused the connection. Make sure the PC app is open.</string>
+    <string name="error_timeout">Connection timed out. Check the IP address.</string>
+    <string name="error_no_network">No network. Check Wi-Fi or the USB cable.</string>
+    <string name="error_bad_address">Invalid address. Use an IPv4 like 192.168.1.20, or scan the QR code.</string>
+    <string name="error_bad_qr">That QR code is not a Nexus Controller pairing code.</string>
+    <string name="error_scan_failed">Scan failed. Try again, or type the IP address.</string>
+    <string name="notice_layout_from_pc">Layout updated from the PC</string>
+    <string name="notice_gyro_calibrated">Gyro centre calibrated</string>
+    <string name="notice_server_closed">Disconnected. The server app was closed.</string>
+
+    <!-- Connection screen -->
+    <string name="connect_title">CONNECT TO HOST</string>
+    <string name="connect_devices">DEVICES</string>
+    <string name="connect_auto_scan">AUTO SCAN</string>
+    <string name="connect_instant_sync">INSTANT SYNC</string>
+    <string name="connect_usb_direct">USB DIRECT</string>
+    <string name="connect_wired">WIRED INTERFACE</string>
+    <string name="connect_radar">NETWORK RADAR</string>
+    <string name="connect_detected">DETECTED IN RADAR</string>
+    <string name="connect_manual_override">MANUAL IP OVERRIDE</string>
+    <string name="connect_select_interface">SELECT INTERFACE</string>
+    <string name="connect_enter_host">Enter Host IP</string>
+    <string name="connect_ip_label">IP Address</string>
+    <string name="connect_ip_hint">Enter an IPv4 address, e.g. 192.168.1.20</string>
+    <string name="action_connect">Connect</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_close">Close</string>
+    <string name="action_back">Back</string>
+    <string name="action_save">Save</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_device_profile">Device Profile</string>
+    <string name="settings_device_name">Device Name</string>
+    <string name="settings_controller_type">Controller Type</string>
+    <string name="settings_controller_type_hint">The PC emulates this device. Changing it reconnects the pad.</string>
+    <string name="settings_connectivity">Connectivity</string>
+    <string name="settings_auto_reconnect">Auto-Reconnect</string>
+    <string name="settings_auto_reconnect_hint">Automatically try to re-link</string>
+    <string name="settings_display">Display</string>
+    <string name="settings_theme">Theme Settings</string>
+    <string name="settings_keep_awake">Keep Screen On</string>
+    <string name="settings_keep_awake_hint">Prevents device from sleeping</string>
+    <string name="settings_haptics">Haptics</string>
+    <string name="settings_haptic_feedback">Haptic Feedback</string>
+    <string name="settings_haptic_feedback_hint">Vibrate on key press</string>
+    <string name="settings_rumble">Rumble (PC Haptics)</string>
+    <string name="settings_rumble_hint">Vibrate when PC sends feedback</string>
+    <string name="settings_haptic_intensity">Haptic Intensity: %1$d%%</string>
+    <string name="settings_sensors">Sensors</string>
+    <string name="settings_gyro">Gyroscope</string>
+    <string name="settings_gyro_hint">Use tilt for steering</string>
+    <string name="settings_gyro_sensitivity">Sensitivity: %1$d%%</string>
+    <string name="settings_calibrate">CALIBRATE CENTER</string>
+    <string name="settings_controls">Controls</string>
+    <string name="settings_trackpad">Trackpad</string>
+    <string name="settings_touch_sensitivity">Touch Sensitivity: %1$s</string>
+    <string name="settings_reset">Reset Defaults</string>
+    <string name="theme_dark">Dark</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_neon">Neon</string>
+    <string name="settings_visuals">Visuals</string>
+    <string name="settings_account">Account</string>
+    <!-- Layouts -->
+    <string name="layouts_saved">Saved</string>
+    <string name="layouts_active">ACTIVE</string>
+    <string name="layouts_create">Create New</string>
+    <string name="layouts_rename">Rename</string>
+    <string name="layouts_rename_title">Rename Layout</string>
+    <string name="layouts_delete">Delete</string>
+    <string name="layouts_open_designer">Edit Designer</string>
+    <string name="layouts_last_used">Last used: %1$s</string>
+    <string name="action_confirm">Confirm</string>
+
+    <!-- Editor and overlays -->
+    <string name="editor_title">Layout Editor</string>
+    <string name="editor_size">SIZE</string>
+    <string name="keyboard_title">Remote Keyboard</string>
+    <string name="keyboard_hint">Type to send to the PC…</string>
+    <string name="keyboard_send">SEND</string>
+    <string name="racing_tap_to_centre">TAP TO CENTRE</string>
+    <string name="racing_brake">BRAKE</string>
+    <string name="racing_clutch">CLUTCH</string>
+    <string name="racing_gear">GEAR</string>
+    <!-- Help: written from what the app actually does, not from a template -->
+    <string name="help_title">Troubleshooting</string>
+    <string name="help_subtitle">Common issues and what to do</string>
+    <string name="help_notfound_title">The phone cannot find the PC</string>
+    <string name="help_notfound_subtitle">No server appears, or connecting times out</string>
+    <string name="help_notfound_1">Press START SERVER on the PC — the ring must read ONLINE and show an address.</string>
+    <string name="help_notfound_2">Put both devices on the same Wi-Fi. A guest network often blocks devices from seeing each other.</string>
+    <string name="help_notfound_3">Let the phone in through the firewall: TCP 6000 and UDP 6001. The dashboard offers to do it for you.</string>
+    <string name="help_notfound_4">If Windows calls that network Public, a rule for private networks does not apply to it. Set the network to private, or open the port for public ones too.</string>
+    <string name="help_notfound_5">Another firewall (ESET, Norton, Kaspersky) filters separately and needs its own rule.</string>
+    <string name="help_notfound_6">A USB cable sidesteps all of it: enable USB debugging, plug in, choose USB in the app.</string>
+
+    <string name="help_lag_title">Lag or stutter</string>
+    <string name="help_lag_subtitle">Presses arrive late</string>
+    <string name="help_lag_1">Use a 5 GHz network. 2.4 GHz is usually crowded.</string>
+    <string name="help_lag_2">Move closer to the router, or use a USB cable — that path has no radio at all.</string>
+    <string name="help_lag_3">Nothing here streams video: the app sends a few hundred bytes a second, so lag is the network, not the load.</string>
+
+    <string name="help_buttons_title">Buttons do nothing in the game</string>
+    <string name="help_buttons_subtitle">The pad connects, the game ignores it</string>
+    <string name="help_buttons_1">Click the game window so it has focus.</string>
+    <string name="help_buttons_2">Check the game reads XInput pads. If it prefers a PlayStation pad, switch this phone to DualShock 4.</string>
+    <string name="help_buttons_3">Windows shows only four XInput pads at once, shared with any physical controller. Past four, use DualShock 4 mode — it does not take a slot.</string>
+    <string name="help_buttons_4">In Buzz mode, set RPCS3 to Settings → I/O → Emulated Buzz devices → 1 controller.</string>
+
+    <string name="help_stuck_title">Still stuck?</string>
+    <string name="help_stuck_body">The dashboard log on the PC records every refused connection and the reason for it.</string>
+
+    <!-- About -->
+    <string name="about_title">About</string>
+    <string name="about_tagline">Turns this phone into an Xbox 360, DualShock 4 or Buzz! controller for a Windows PC, over Wi-Fi or a USB cable.</string>
+    <string name="about_how_title">How it works</string>
+    <string name="about_how_body">The phone sends button presses over TCP 6000. The PC turns them into a virtual controller through the ViGEmBus driver, so games see an ordinary gamepad. Nothing leaves your network and nothing is streamed.</string>
+    <string name="about_privacy_title">Privacy</string>
+    <string name="about_privacy_body">No accounts, no telemetry, no data leaves your LAN. The app talks to one PC, the one whose pairing code you scanned.</string>
+    <string name="about_source_body">Built with Jetpack Compose. Source, licences and releases are on GitHub.</string>
+    <string name="about_releases">RELEASES ON GITHUB</string>
+    <!-- Why the server refused. Read at the worst possible moment, so plain. -->
+    <string name="reject_version">The PC app speaks a different protocol version. Update it.</string>
+    <string name="reject_token">Wrong pairing code. Scan the QR code again.</string>
+    <string name="reject_full">No free player slot right now. Disconnect a pad, or try again in a moment.</string>
+    <string name="reject_malformed">The PC refused the handshake (malformed request).</string>
+    <string name="reject_unauthenticated">The PC refused the handshake (not authenticated).</string>
+    <string name="reject_rate_limited">Too many failed attempts. Wait a minute and try again.</string>
+    <string name="reject_unknown">The PC refused the connection (code 0x%1$02X).</string>
+    <string name="error_disconnected">Disconnected by the PC.</string>
+    <string name="buzz_dome">Buzz</string>
+    <string name="buzz_blue">Blue</string>
+    <string name="buzz_orange">Orange</string>
+    <string name="buzz_green">Green</string>
+    <string name="buzz_yellow">Yellow</string>
+    <string name="error_connection">Connection problem. Check the PC app and the network.</string>
+    <string name="pad_ds3_summary">PS3 labels, for RPCS3</string>
+    <string name="settings_guide_hold">Hold the Guide button</string>
+    <string name="settings_guide_hold_hint">Windows treats Guide as “go home”, so it asks for a short hold</string>
+</resources>

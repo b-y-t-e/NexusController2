@@ -160,7 +160,9 @@ class NetworkController {
                     if (reasonCode < 0) throw ProtocolException("Connection closed during handshake")
                     val reason = RejectReason.fromCode(reasonCode)
                     main { onRejected?.invoke(reason) }
-                    throw ProtocolException(RejectReason.messageFor(reasonCode))
+                    // A code, not a sentence: this file has no Context and the text is
+                    // translated. MainActivity turns it into something readable.
+                    throw ProtocolException("$REJECT_PREFIX$reasonCode")
                 }
                 -1 -> throw ProtocolException("Server closed the connection during the handshake")
                 else -> throw ProtocolException("Unexpected handshake reply 0x%02X".format(opcode))
@@ -233,7 +235,7 @@ class NetworkController {
                     val reason = if (reasonCode >= 0) RejectReason.fromCode(reasonCode) else null
                     main { onRejected?.invoke(reason) }
                     throw ProtocolException(
-                        if (reasonCode >= 0) RejectReason.messageFor(reasonCode) else "Disconnected by the server"
+                        if (reasonCode >= 0) "$REJECT_PREFIX$reasonCode" else REJECT_PREFIX
                     )
                 }
                 // Payload lengths are fixed per opcode, so an unknown opcode desynchronises
@@ -494,13 +496,16 @@ class NetworkController {
 
     class ProtocolException(message: String) : Exception(message)
 
-    private companion object {
-        const val TAG = "Nexus"
-        const val CONNECT_TIMEOUT_MS = 5000
-        const val HANDSHAKE_TIMEOUT_MS = 5000
-        const val PING_INTERVAL_MS = 1000L
-        const val DISCOVERY_TIMEOUT_MS = 1500
-        const val DISCOVERY_INTERVAL_MS = 1000L
-        const val BATCH_LIMIT = 20
+    companion object {
+        /** Marker for "the server refused us, with this code". */
+        const val REJECT_PREFIX = "reject:"
+
+        private const val TAG = "Nexus"
+        private const val CONNECT_TIMEOUT_MS = 5000
+        private const val HANDSHAKE_TIMEOUT_MS = 5000
+        private const val PING_INTERVAL_MS = 1000L
+        private const val DISCOVERY_TIMEOUT_MS = 1500
+        private const val DISCOVERY_INTERVAL_MS = 1000L
+        private const val BATCH_LIMIT = 20
     }
 }

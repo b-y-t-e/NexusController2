@@ -24,6 +24,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -44,11 +45,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 
+private const val RELEASES_URL =
+    "https://github.com/b-y-t-e/NexusController2/releases/latest"
+
 @Composable
 fun AboutScreen(
     onBack: () -> Unit,
     themeMode: String
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val isLight = themeMode == "Light"
     
     // Theme Colors matching the HTML/Tailwind design
@@ -158,65 +163,62 @@ fun AboutScreen(
                 verticalArrangement = Arrangement.spacedBy(24.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                // About App
+                // What it is, in one honest paragraph. The original said this
+                // was "ultimate low-latency remote play" bridging "professional-
+                // grade performance", which describes a streaming product rather
+                // than this one.
                 AboutCard(
-                    title = "About the App",
+                    title = stringResource(R.string.about_title),
                     icon = Icons.Rounded.RocketLaunch,
                     primaryColor = primaryColor,
                     surfaceColor = surfaceColor,
                     borderColor = borderColor
                 ) {
                     Text(
-                        "Experience the ultimate low-latency remote play. Nexus Controller bridges the gap between your PC and mobile devices with professional-grade performance and zero-config setup.",
+                        stringResource(R.string.about_tagline),
                         color = subTextColor,
                         fontSize = 14.sp,
                         lineHeight = 22.sp
                     )
                 }
-                
-                // Development
+
                 AboutCard(
-                    title = "Development",
+                    title = stringResource(R.string.about_how_title),
                     icon = Icons.Rounded.Groups,
                     primaryColor = primaryColor,
                     surfaceColor = surfaceColor,
                     borderColor = borderColor
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        DevMember("Core Engineering", "Alex Rivers, Marcus Chen", subTextColor, textColor)
-                        DevMember("Interface Design", "Sarah Jenkins", subTextColor, textColor)
-                    }
+                    // The "Development" card credited Alex Rivers, Marcus Chen and
+                    // Sarah Jenkins — none of whom exist. Invented credits in a
+                    // shipped app are a lie, so this says how the thing works.
+                    Text(
+                        stringResource(R.string.about_how_body),
+                        color = subTextColor,
+                        fontSize = 14.sp,
+                        lineHeight = 22.sp
+                    )
                 }
-                
-                // Legal
+
                 AboutCard(
-                    title = "Legal",
+                    title = stringResource(R.string.about_privacy_title),
                     icon = Icons.Rounded.Gavel,
                     primaryColor = primaryColor,
                     surfaceColor = surfaceColor,
                     borderColor = borderColor
                 ) {
-                    Column {
-                        LegalLink(
-                            text = "Privacy Policy", 
-                            color = subTextColor, 
-                            borderColor = borderColor, 
-                            isFirst = true,
-                            dummyContent = "Data collection is minimal and only used for app functionality. No personal data is shared with third parties. Used mainly for local network discovery."
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            stringResource(R.string.about_privacy_body),
+                            color = subTextColor,
+                            fontSize = 14.sp,
+                            lineHeight = 22.sp
                         )
-                        LegalLink(
-                            text = "Terms of Service", 
-                            color = subTextColor, 
-                            borderColor = borderColor, 
-                            isFirst = false,
-                            dummyContent = "By using this application, you agree to use it responsibly. Reverse engineering for malicious purposes is prohibited. Provided 'as-is' without warranty."
-                        )
-                        LegalLink(
-                            text = "Open Source", 
-                            color = subTextColor, 
-                            borderColor = borderColor, 
-                            isFirst = false,
-                            dummyContent = "This project uses open source libraries including Jetpack Compose, Accompanist, and others. See GitHub repository for full license details."
+                        Text(
+                            stringResource(R.string.about_source_body),
+                            color = subTextColor,
+                            fontSize = 14.sp,
+                            lineHeight = 22.sp
                         )
                     }
                 }
@@ -240,7 +242,19 @@ fun AboutScreen(
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))
                     .background(primaryColor)
-                    .clickable { /* Check Update */ }
+                    // Was an empty onClick under the words "CHECK FOR
+                    // UPDATES" — a button that promised to do something and did
+                    // nothing. It now opens the page the releases are actually on.
+                    .clickable {
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse(RELEASES_URL)
+                                )
+                            )
+                        }
+                    }
                     .padding(horizontal = 40.dp, vertical = 16.dp)
                     .shadow(15.dp, spotColor = primaryColor.copy(alpha = 0.4f)) // Neon Shadow
             ) {
@@ -255,7 +269,7 @@ fun AboutScreen(
                         modifier = Modifier.size(20.dp).rotate(rotation.value)
                     )
                     Text(
-                        "CHECK FOR UPDATES",
+                        stringResource(R.string.about_releases),
                         color = Color.White,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,

@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         setContent {
             val context = LocalContext.current
             val haptics = remember { Haptics(context) }
+            val wifi = remember { LowLatencyWifi(context) }
 
             var isConnected by remember { mutableStateOf(false) }
             var showMenu by remember { mutableStateOf(false) }
@@ -88,7 +89,20 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             var autoReconnect by remember { mutableStateOf(prefs.getBoolean("auto_reconnect", true)) }
             var deviceName by remember { mutableStateOf(prefs.getString("device_name", "Player 1") ?: "Player 1") }
             var touchSensitivity by remember { mutableFloatStateOf(prefs.getFloat("touch_sensitivity", 1.0f)) }
+            // On by default: Guide means "go home" to Windows, and the middle of
+            // a pad is where a thumb passes.
+            var guideHold by remember { mutableStateOf(prefs.getBoolean("guide_hold", true)) }
             var controllerType by remember { mutableStateOf(layoutStore.controllerType()) }
+            var needsFirstRunChoice by remember { mutableStateOf(!layoutStore.hasChosenControllerType()) }
+
+            if (needsFirstRunChoice) {
+                FirstRunScreen { chosen ->
+                    controllerType = chosen
+                    layoutStore.setControllerType(chosen)
+                    needsFirstRunChoice = false
+                }
+                return@setContent
+            }
 
             // ---- connection ----
             var target by remember { mutableStateOf(loadSavedTarget()) }
@@ -110,7 +124,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             DisposableEffect(Unit) {
                 networkController.onStateChanged = { state ->
                     isConnected = state == NetworkController.State.CONNECTED
-                    if (isConnected) handshakeBlocked = false else haptics.cancel()
+                    if (isConnected) {
+                        handshakeBlocked = false
+                        // Held only while a pad is actually in use; it costs battery.
+                        wifi.acquire()
+                    } else {
+                        haptics.cancel()
+                        wifi.release()
+                    }
                 }
                 networkController.onRumble = { large, small ->
                     val strength = maxOf(large, small)
@@ -121,7 +142,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     ledColor = if (r == 0 && g == 0 && b == 0) null else Color(r, g, b)
                 }
                 networkController.onWelcome = { welcome ->
-                    globalToastMessage = "Connected as player ${welcome.slot + 1}"
+                    globalToastMessage = getString(R.string.connect_connected, welcome.slot + 1)
                     welcomeTick++
                 }
                 networkController.onRejected = { reason ->
@@ -132,6 +153,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 }
                 networkController.onError = { msg -> globalToastMessage = friendlyError(msg) }
                 onDispose {
+                    wifi.release()
                     networkController.onStateChanged = null
                     networkController.onRumble = null
                     networkController.onLed = null
@@ -262,7 +284,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     if (target != null) networkController.connect(target, newType, deviceName)
                 }
 
-                globalToastMessage = "Layout updated from PC"
+                globalToastMessage = getString(R.string.notice_layout_from_pc)
                 configRevision++
             }
 
@@ -294,11 +316,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 // The device type is announced in HELLO, so the session has to be redialled.
                 networkController.disconnect()
                 if (target != null) networkController.connect(target, type, deviceName)
-                globalToastMessage = "Controller type: ${type.label}"
+                // No toast: the pad on screen has just become that controller.
+                // Announcing it covered the mode bar to say what the user is
+                // already looking at.
             }
 
             PSControllerScreen(
                 isConnected = isConnected,
+                guideHold = guideHold,
                 showConnectionDialog = showConnectionDialog,
                 currentMode = currentMode,
                 controllerType = controllerType,
@@ -363,6 +388,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     showHelp = false
                     showAbout = false
                 },
+                isConnected = isConnected,
+                onConnect = {
+                    showMenu = false
+                    showConnectionDialog = true
+                },
                 onDisconnect = {
                     networkController.disconnect()
                     target = null
@@ -404,6 +434,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     gyroEnabled = gyroEnabled,
                     gyroSensitivity = gyroSensitivity,
                     touchVibration = touchVibration,
+                    guideHold = guideHold,
                     autoReconnect = autoReconnect,
                     deviceName = deviceName,
                     touchSensitivity = touchSensitivity,
@@ -436,7 +467,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 onCalibrateGyro = {
                     gyroRollOffset = gyroRoll
                     gyroPitchOffset = gyroPitch
-                    globalToastMessage = "Gyro Center Calibrated"
+                    globalToastMessage = getString(R.string.notice_gyro_calibrated)
+                },
+                onGuideHoldToggle = {
+                    guideHold = it
+                    prefs.edit().putBoolean("guide_hold", it).apply()
                 },
                 onTouchVibrationToggle = {
                     touchVibration = it
@@ -492,7 +527,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                             val parsed = resolveTarget(raw)
                             if (parsed == null) {
                                 globalToastMessage =
-                                    "Invalid address. Use an IPv4 like 192.168.1.20 or scan the QR code."
+                                    getString(R.string.error_bad_address)
                             } else {
                                 applyTarget(parsed)
                                 showConnectionDialog = false
@@ -501,7 +536,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         onConnectDiscovered = { ip, port ->
                             val parsed = resolveTarget(ip)?.copy(port = port)
                             if (parsed == null) {
-                                globalToastMessage = "Invalid address reported by discovery."
+                                globalToastMessage = getString(R.string.error_bad_address)
                             } else {
                                 applyTarget(parsed)
                                 showConnectionDialog = false
@@ -518,14 +553,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                                     val parsed = QrPayload.parse(barcode.rawValue)
                                     if (parsed == null) {
                                         globalToastMessage =
-                                            "This QR code is not a Nexus Controller pairing code."
+                                            getString(R.string.error_bad_qr)
                                     } else {
                                         applyTarget(parsed)
                                         showConnectionDialog = false
                                     }
                                 }
                                 .addOnFailureListener { e ->
-                                    globalToastMessage = "QR Scan failed. Please try again or enter IP manually."
+                                    globalToastMessage = getString(R.string.error_scan_failed)
                                     android.util.Log.e("QRScan", "Scan failed", e)
                                 }
                         },
@@ -667,19 +702,37 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         return if (parsed.token.isEmpty()) parsed.copy(token = tokenFor(parsed.ip)) else parsed
     }
 
+    /**
+     * Turns a socket exception into something worth reading.
+     *
+     * The *matching* stays on the English text java.net produces — that is what
+     * arrives regardless of the phone's language — while the *answer* comes from
+     * resources, so it is the reader's language.
+     */
+    /** Turns "reject:<code>" into the reason, in the reader's language. */
+    private fun rejectMessage(msg: String): String {
+        val code = msg.removePrefix(NetworkController.REJECT_PREFIX).toIntOrNull()
+            ?: return getString(R.string.error_disconnected)
+        val reason = RejectReason.fromCode(code)
+        return if (reason != null) getString(reason.messageRes)
+        else getString(R.string.reject_unknown, code)
+    }
+
     private fun friendlyError(msg: String): String = when {
-        RejectReason.entries.any { it.message == msg } -> msg
+        msg.startsWith(NetworkController.REJECT_PREFIX) -> rejectMessage(msg)
         msg.contains("failed to connect", ignoreCase = true) ->
-            "Can't find PC. Check if server is running and firewall is off."
+            getString(R.string.error_no_pc)
         msg.contains("Connection refused", ignoreCase = true) ->
-            "Server refused connection. Ensure the PC app is open."
+            getString(R.string.error_refused)
         msg.contains("timeout", ignoreCase = true) || msg.contains("timed out", ignoreCase = true) ->
-            "Connection timed out. Check your IP Address."
+            getString(R.string.error_timeout)
         msg.contains("Network is unreachable", ignoreCase = true) ->
-            "No network. Check your Wi-Fi or USB connection."
+            getString(R.string.error_no_network)
         msg.contains("EOF", ignoreCase = true) || msg.contains("closed the connection", ignoreCase = true) ->
-            "Disconnected. Server app was closed."
-        else -> "Connection Error: $msg"
+            getString(R.string.notice_server_closed)
+        // Never the raw exception. "java.net.SocketException: Software caused
+        // connection abort" tells the reader nothing they can act on.
+        else -> getString(R.string.error_connection)
     }
 
     // ---------------------------------------------------------------- lifecycle

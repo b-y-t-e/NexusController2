@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +42,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -53,6 +55,12 @@ import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/** How often the pad's own state is examined. Sending is driven by change. */
+private const val INPUT_POLL_MS = 4L
+
+/** A resend even when nothing moved, so a lost packet cannot strand the pad. */
+private const val IDLE_HEARTBEAT_MS = 250L
+
 /**
  * The play surface: gamepad (mode 0), trackpad (mode 1) and racing wheel (mode 2).
  *
@@ -63,6 +71,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun PSControllerScreen(
     isConnected: Boolean,
+    /** Guide must be held rather than tapped; see PSCenterButton. */
+    guideHold: Boolean = true,
     showConnectionDialog: Boolean,
     currentMode: Int,
     controllerType: ControllerType,
@@ -130,6 +140,20 @@ fun PSControllerScreen(
     var isEditMode by remember { mutableStateOf(false) }
     var selectedId by remember { mutableStateOf<String?>(null) }
 
+    // While you are playing, the pad is the whole interface: the chrome steps
+    // aside a few seconds after you stop using it. It used to sit over the play
+    // surface permanently, where the buzzer dome and the shoulder buttons ran
+    // straight into it. Editing and connecting are deliberate acts, so there the
+    // bar stays put.
+    var chromeShown by remember { mutableStateOf(true) }
+    // Bumped on every use, so the countdown restarts instead of running out
+    // under the hand of someone still choosing.
+    var chromeTouched by remember { mutableIntStateOf(0) }
+    fun showChromeAgain() {
+        chromeShown = true
+        chromeTouched++
+    }
+
     data class ThemeColors(
         val bg: Color,
         val bgGradientStart: Color,
@@ -174,7 +198,22 @@ fun PSControllerScreen(
     val componentStroke = currentTheme.componentStroke
     val textColor = currentTheme.text
 
+    /*
+     * Input is sent when it *changes*, not on a metronome.
+     *
+     * The old loop slept 15 ms between frames, so a press waited up to that long
+     * before it was even written to the socket — 7.5 ms on average, added to
+     * everything else, for every button on the pad. It also sent 66 identical
+     * frames a second while nothing was happening.
+     *
+     * Polling at 4 ms and writing only on a change inverts both: a press leaves
+     * within a few milliseconds, and a still pad sends nothing but a slow
+     * heartbeat. The channel to the socket is conflated, so even a fast burst
+     * cannot back up — the newest state wins.
+     */
     LaunchedEffect(Unit) {
+        var lastSent: Triple<Int, Int, List<Int>>? = null
+        var lastSentAt = 0L
         while (true) {
             val bl = pressedLow.asSequence().filter { (k, _) ->
                 val id = k.split(":")[0]
@@ -196,8 +235,17 @@ fun PSControllerScreen(
                 ly = 127
             }
 
-            currentOnInputChanged(bl, bh, lx, ly, rightX, rightY, leftTrigger, rightTrigger)
-            delay(15)   // ~66 Hz
+            val axes = listOf(lx, ly, rightX, rightY, leftTrigger, rightTrigger)
+            val now = System.currentTimeMillis()
+            val frame = Triple(bl, bh, axes)
+            // The heartbeat exists so a server that missed a packet, or a pad
+            // left untouched across a reconnect, cannot sit on a stale state.
+            if (frame != lastSent || now - lastSentAt >= IDLE_HEARTBEAT_MS) {
+                currentOnInputChanged(bl, bh, lx, ly, rightX, rightY, leftTrigger, rightTrigger)
+                lastSent = frame
+                lastSentAt = now
+            }
+            delay(INPUT_POLL_MS)
         }
     }
 
@@ -216,86 +264,133 @@ fun PSControllerScreen(
             CarbonBackgroundPattern()
         }
 
+        // Anywhere on the bare surface. Controls consume their own touches, so
+        // this only fires on the background — which no layout can cover.
         if (currentMode != 1) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(onLongPress = { showChromeAgain() })
+                    }
+            )
+        }
+
+        if (currentMode != 1) {
+            val chromeIsPinned = isEditMode || showConnectionDialog
+
+            LaunchedEffect(chromeIsPinned, chromeShown, chromeTouched) {
+                if (!chromeIsPinned && chromeShown) {
+                    delay(3500)
+                    chromeShown = false
+                }
+            }
+
+            val chromeAlpha by animateFloatAsState(
+                targetValue = if (chromeIsPinned || chromeShown) 1f else 0f,
+                animationSpec = spring(stiffness = Spring.StiffnessLow),
+                label = "chrome"
+            )
+
+            // Two ways back, because one is a trap: a control placed under the
+            // strip would swallow every tap on it, and the user would be shut
+            // inside play mode with no way to reach the menu. The long press on
+            // the background is the one that cannot be covered up.
+            if (chromeAlpha < 0.5f) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .zIndex(9f)
+                        .size(width = 96.dp, height = 22.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { showChromeAgain() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        Modifier
+                            .size(width = 32.dp, height = 3.dp)
+                            .background(Color.White.copy(alpha = 0.22f), CircleShape)
+                    )
+                }
+            }
+
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
+                    // Above the play surface: a control drawn later must never
+                    // paint over the chrome the way the Buzz dome did.
+                    .zIndex(10f)
+                    .alpha(chromeAlpha)
                     .fillMaxWidth()
                     .padding(horizontal = 24.dp, vertical = 8.dp)
                     .height(48.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(AppColors.Surface)
-                        .border(1.dp, Color.White.copy(alpha = 0.1f), CircleShape)
-                        .clickable { onToggleMenu() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("☰", color = Color.White.copy(alpha = 0.8f), fontSize = 20.sp)
-                }
+                if (chromeAlpha > 0.05f) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(AppColors.Surface)
+                            .border(1.dp, Color.White.copy(alpha = 0.1f), CircleShape)
+                            .clickable { showChromeAgain(); onToggleMenu() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("☰", color = Color.White.copy(alpha = 0.8f), fontSize = 20.sp)
+                    }
 
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .height(44.dp)
-                        .background(AppColors.Surface.copy(alpha = 0.8f), RoundedCornerShape(50))
-                        .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(50))
-                        .padding(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    listOf("PLAY", "EDIT", "CONNECT").forEach { item ->
-                        val displayLabel = if (item == "EDIT" && isEditMode) "SAVE" else item
-                        val isActive = when (item) {
-                            "PLAY" -> !isEditMode && !showConnectionDialog
-                            "EDIT" -> isEditMode
-                            "CONNECT" -> showConnectionDialog
-                            else -> false
-                        }
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .height(44.dp)
+                            .background(AppColors.Surface.copy(alpha = 0.8f), RoundedCornerShape(50))
+                            .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(50))
+                            .padding(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val play = stringResource(R.string.mode_play)
+                        val edit = stringResource(R.string.mode_edit)
+                        val save = stringResource(R.string.mode_save)
+                        val connect = stringResource(R.string.mode_connect)
+                        // Keyed by identity, labelled by translation: a Polish
+                        // "EDYTUJ" must not stop matching the branch it drives.
+                        listOf("PLAY" to play, "EDIT" to edit, "CONNECT" to connect)
+                            .forEach { (item, label) ->
+                            val displayLabel = if (item == "EDIT" && isEditMode) save else label
+                            val isActive = when (item) {
+                                "PLAY" -> !isEditMode && !showConnectionDialog
+                                "EDIT" -> isEditMode
+                                "CONNECT" -> showConnectionDialog
+                                else -> false
+                            }
 
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(if (isActive) AppColors.Primary else Color.Transparent)
-                                .clickable {
-                                    when (item) {
-                                        "PLAY" -> { if (isEditMode) onSave(); isEditMode = false; onCloseConnection() }
-                                        "EDIT" -> { if (isEditMode) onSave(); isEditMode = !isEditMode; onCloseConnection() }
-                                        "CONNECT" -> { onOpenConnection(); isEditMode = false }
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(if (isActive) AppColors.Primary else Color.Transparent)
+                                    .clickable {
+                                        showChromeAgain()
+                                        when (item) {
+                                            "PLAY" -> { if (isEditMode) onSave(); isEditMode = false; onCloseConnection() }
+                                            "EDIT" -> { if (isEditMode) onSave(); isEditMode = !isEditMode; onCloseConnection() }
+                                            "CONNECT" -> { onOpenConnection(); isEditMode = false }
+                                        }
                                     }
-                                }
-                                .padding(horizontal = 24.dp, vertical = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                displayLabel,
-                                color = if (isActive) Color.White else Color.White.copy(alpha = 0.4f),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp
-                            )
+                                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    displayLabel,
+                                    color = if (isActive) Color.White else Color.White.copy(alpha = 0.4f),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.sp
+                                )
+                            }
                         }
                     }
-                }
-
-                // Active controller type badge
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .clip(RoundedCornerShape(50))
-                        .background(AppColors.Surface.copy(alpha = 0.8f))
-                        .border(1.dp, AppColors.Primary.copy(alpha = 0.3f), RoundedCornerShape(50))
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        controllerType.label.uppercase(),
-                        color = AppColors.Accent,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 1.sp
-                    )
                 }
             }
         }
@@ -334,7 +429,7 @@ fun PSControllerScreen(
                     )
                 } else {
                     EditableComponent("L2", isEditMode, selectedId == "L2", getConf("L2"), { selectedId = it }) {
-                        PSTriggerShape(Glyphs.trigger(controllerType, true), Modifier, componentBg, textColor, isLeft = true) { f ->
+                        PSTriggerShape(Glyphs.trigger(controllerType, true), Modifier, componentBg, textColor, isLeft = true, onVibrate = { vibrate() }) { f ->
                             leftTrigger = (f * 255).toInt().coerceIn(0, 255)
                         }
                     }
@@ -359,6 +454,7 @@ fun PSControllerScreen(
                     EditableComponent("L_STICK", isEditMode, selectedId == "L_STICK", getConf("L_STICK"), { selectedId = it }) {
                         PSJoystickSimple(
                             "L", componentBg, componentStroke,
+                            onVibrate = { vibrate() },
                             onClick = { pressed -> updateBtn("L_STICK", "click", Protocol.BTN_L3, true, pressed) }
                         ) { x, y ->
                             leftX = ((x + 1) * 127.5).toInt().coerceIn(0, 255)
@@ -366,7 +462,7 @@ fun PSControllerScreen(
                         }
                     }
                     EditableComponent("R2", isEditMode, selectedId == "R2", getConf("R2"), { selectedId = it }) {
-                        PSTriggerShape(Glyphs.trigger(controllerType, false), Modifier, componentBg, textColor, isLeft = false) { f ->
+                        PSTriggerShape(Glyphs.trigger(controllerType, false), Modifier, componentBg, textColor, isLeft = false, onVibrate = { vibrate() }) { f ->
                             rightTrigger = (f * 255).toInt().coerceIn(0, 255)
                         }
                     }
@@ -384,6 +480,7 @@ fun PSControllerScreen(
                     EditableComponent("R_STICK", isEditMode, selectedId == "R_STICK", getConf("R_STICK"), { selectedId = it }) {
                         PSJoystickSimple(
                             "R", componentBg, componentStroke,
+                            onVibrate = { vibrate() },
                             onClick = { pressed -> updateBtn("R_STICK", "click", Protocol.BTN_R3, true, pressed) }
                         ) { x, y ->
                             rightX = ((x + 1) * 127.5).toInt().coerceIn(0, 255)
@@ -536,11 +633,13 @@ private fun BuzzLayout(
     val getConf = { id: String -> configs[id] ?: CompConfig(0.5f, 0.5f) }
 
     EditableComponent("BUZZ_RED", isEditMode, selectedId == "BUZZ_RED", getConf("BUZZ_RED"), onSelect) {
-        BuzzBuzzerButton(onVibrate) { mask, pressed -> onButton("BUZZ_RED", mask, pressed) }
+        BuzzBuzzerButton(stringResource(R.string.buzz_dome), onVibrate) { mask, pressed ->
+            onButton("BUZZ_RED", mask, pressed)
+        }
     }
     BuzzAnswerSpec.ALL.forEach { spec ->
         EditableComponent(spec.id, isEditMode, selectedId == spec.id, getConf(spec.id), onSelect) {
-            BuzzAnswerButton(spec.label, spec.color, spec.mask, onVibrate) { mask, pressed ->
+            BuzzAnswerButton(stringResource(spec.labelRes), spec.color, spec.mask, onVibrate) { mask, pressed ->
                 onButton(spec.id, mask, pressed)
             }
         }
@@ -548,13 +647,19 @@ private fun BuzzLayout(
 }
 
 /** The four answer buttons, in physical order: blue, orange, green, yellow. */
-data class BuzzAnswerSpec(val id: String, val label: String, val color: Color, val mask: Int) {
+data class BuzzAnswerSpec(
+    val id: String,
+    /** Spoken by a screen reader; never drawn — the colour is the visible label. */
+    @androidx.annotation.StringRes val labelRes: Int,
+    val color: Color,
+    val mask: Int
+) {
     companion object {
         val ALL = listOf(
-            BuzzAnswerSpec("BUZZ_BLUE", "Blue", AppColors.BuzzBlue, Protocol.BUZZ_BLUE),
-            BuzzAnswerSpec("BUZZ_ORANGE", "Orange", AppColors.BuzzOrange, Protocol.BUZZ_ORANGE),
-            BuzzAnswerSpec("BUZZ_GREEN", "Green", AppColors.BuzzGreen, Protocol.BUZZ_GREEN),
-            BuzzAnswerSpec("BUZZ_YELLOW", "Yellow", AppColors.BuzzYellow, Protocol.BUZZ_YELLOW)
+            BuzzAnswerSpec("BUZZ_BLUE", R.string.buzz_blue, AppColors.BuzzBlue, Protocol.BUZZ_BLUE),
+            BuzzAnswerSpec("BUZZ_ORANGE", R.string.buzz_orange, AppColors.BuzzOrange, Protocol.BUZZ_ORANGE),
+            BuzzAnswerSpec("BUZZ_GREEN", R.string.buzz_green, AppColors.BuzzGreen, Protocol.BUZZ_GREEN),
+            BuzzAnswerSpec("BUZZ_YELLOW", R.string.buzz_yellow, AppColors.BuzzYellow, Protocol.BUZZ_YELLOW)
         )
 
         fun forId(id: String): BuzzAnswerSpec? = ALL.firstOrNull { it.id == id }
@@ -577,7 +682,7 @@ private fun SizeStrip(config: CompConfig?, modifier: Modifier) {
     ) {
         if (config == null) return@Box
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("SIZE", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.editor_size), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.width(16.dp))
             Slider(
                 value = config.scale,
@@ -805,7 +910,7 @@ private fun RacingScreen(
                     onSteer((((newRot / 135f) + 1f) * 127.5f).toInt().coerceIn(0, 255))
                 }
                 Text(
-                    "TAP TO CENTRE",
+                    stringResource(R.string.racing_tap_to_centre),
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .clickable { onCalibrate() }
@@ -848,8 +953,8 @@ private fun RacingScreen(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalAlignment = Alignment.Bottom
             ) {
-                RacingPedal("CLUTCH", Modifier.fillMaxHeight(0.7f), color = AppColors.NeonYellow, width = 60.dp) { }
-                RacingPedal("BRAKE", Modifier.fillMaxHeight(0.85f), color = AppColors.NeonRed, width = 100.dp) { v ->
+                RacingPedal(stringResource(R.string.racing_clutch), Modifier.fillMaxHeight(0.7f), color = AppColors.NeonYellow, width = 60.dp) { }
+                RacingPedal(stringResource(R.string.racing_brake), Modifier.fillMaxHeight(0.85f), color = AppColors.NeonRed, width = 100.dp) { v ->
                     onBrake((v * 255).toInt())
                     if (v > 0) onVibrate()
                 }
@@ -875,13 +980,13 @@ fun KeyboardDialog(
             colors = CardDefaults.cardColors(containerColor = Color.White)
         ) {
             Column(Modifier.padding(16.dp)) {
-                Text("Remote Keyboard", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                Text(stringResource(R.string.keyboard_title), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                 Spacer(Modifier.height(16.dp))
 
                 TextField(
                     value = text,
                     onValueChange = { text = it },
-                    placeholder = { Text("Type to send to PC...") },
+                    placeholder = { Text(stringResource(R.string.keyboard_hint)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = false,
                     maxLines = 4
@@ -890,11 +995,11 @@ fun KeyboardDialog(
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                     Button(onClick = onDismiss, colors = ButtonDefaults.buttonColors(containerColor = Color.Gray)) {
-                        Text("Cancel")
+                        Text(stringResource(R.string.action_cancel))
                     }
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = { if (text.isNotEmpty()) onSend(text) }) {
-                        Text("SEND")
+                        Text(stringResource(R.string.keyboard_send))
                     }
                 }
             }

@@ -53,13 +53,20 @@ class LayoutStore(
             "R_STICK" to LayoutEntry(0.85f, 0.70f, 1.2f)
         )
 
-        /** Big dome centred near the top, four answer buttons in a row underneath. */
+        /**
+         * Dome on the left, the four answer bars standing side by side beside it.
+         * Mirrors DEFAULT_BUZZ_LAYOUT on the PC.
+         *
+         * The buzzer stacks its bars flat. On a wide, short screen that wastes
+         * the dimension there is least of; stood upright the bars are as long as
+         * the screen is tall and four still fit in a row.
+         */
         private val BUZZ_DEFAULTS = linkedMapOf(
-            "BUZZ_RED" to LayoutEntry(0.50f, 0.28f, 1.0f),
-            "BUZZ_BLUE" to LayoutEntry(0.20f, 0.75f, 1.0f),
-            "BUZZ_ORANGE" to LayoutEntry(0.40f, 0.75f, 1.0f),
-            "BUZZ_GREEN" to LayoutEntry(0.60f, 0.75f, 1.0f),
-            "BUZZ_YELLOW" to LayoutEntry(0.80f, 0.75f, 1.0f)
+            "BUZZ_RED" to LayoutEntry(0.19f, 0.52f, 0.90f),
+            "BUZZ_BLUE" to LayoutEntry(0.44f, 0.50f, 1.25f),
+            "BUZZ_ORANGE" to LayoutEntry(0.59f, 0.50f, 1.25f),
+            "BUZZ_GREEN" to LayoutEntry(0.74f, 0.50f, 1.25f),
+            "BUZZ_YELLOW" to LayoutEntry(0.89f, 0.50f, 1.25f)
         )
     }
 
@@ -79,6 +86,16 @@ class LayoutStore(
     fun setControllerType(type: ControllerType) {
         prefs.edit().putString("controller_type", type.name).apply()
     }
+
+    /**
+     * Whether the pad to start in has ever been chosen.
+     *
+     * Distinct from [controllerType] having a value: that one falls back to Xbox
+     * 360, so it can never say "nobody has picked yet". A fresh install therefore
+     * dropped the user straight into an Xbox pad even when they had installed the
+     * app to press a Buzz buzzer.
+     */
+    fun hasChosenControllerType(): Boolean = prefs.contains("controller_type")
 
     fun save(configs: Map<String, CompConfig>, profile: String, type: ControllerType) {
         saveEntries(configs.mapValues { it.value.toEntry() }, profile, type)

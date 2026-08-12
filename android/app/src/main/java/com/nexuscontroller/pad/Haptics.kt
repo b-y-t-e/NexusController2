@@ -10,7 +10,7 @@ import android.util.Log
 
 /**
  * Thin wrapper over [Vibrator]. The system service is resolved once, not on every button
- * press (the pad emits up to 66 input frames per second).
+ * press (a pad under a fast thumb emits a couple of hundred frames a second).
  */
 class Haptics(context: Context) {
 

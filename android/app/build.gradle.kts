@@ -21,6 +21,28 @@ android {
         }
     }
 
+    /*
+     * Two APKs from one source tree.
+     *
+     * `modern` is the one to install: API 28 upwards, which is what almost every
+     * phone in use runs. `legacy` reaches back to Android 5 for the drawer full
+     * of old phones that is exactly where a room of four Buzz buzzers comes from.
+     * Nothing in the code differs — every call newer than API 21 is already
+     * guarded by a SDK_INT check — so the only cost is a second build.
+     */
+    flavorDimensions += "api"
+    productFlavors {
+        create("modern") {
+            dimension = "api"
+            minSdk = 28
+        }
+        create("legacy") {
+            dimension = "api"
+            minSdk = 21
+            versionNameSuffix = "-legacy"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

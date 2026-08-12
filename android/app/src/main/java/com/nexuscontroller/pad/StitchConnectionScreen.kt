@@ -24,6 +24,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
@@ -176,7 +177,7 @@ fun CategorySelection(
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                "SELECT INTERFACE",
+                stringResource(R.string.connect_select_interface),
                 color = subTextColor,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Black,
@@ -184,7 +185,7 @@ fun CategorySelection(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "CONNECT TO HOST",
+                stringResource(R.string.connect_title),
                 color = contentColor,
                 fontSize = 32.sp,
                 fontWeight = FontWeight.Black,
@@ -193,8 +194,8 @@ fun CategorySelection(
             Spacer(modifier = Modifier.height(48.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
                 ConnectionOptionCard(
-                    title = "AUTO SCAN",
-                    subtitle = "NETWORK RADAR",
+                    title = stringResource(R.string.connect_auto_scan),
+                    subtitle = stringResource(R.string.connect_radar),
                     icon = Icons.Rounded.WifiFind,
                     color = accentBlue,
                     onClick = onAutoConnect,
@@ -203,8 +204,8 @@ fun CategorySelection(
                     subTextColor = subTextColor
                 )
                 ConnectionOptionCard(
-                    title = "USB DIRECT",
-                    subtitle = "WIRED INTERFACE",
+                    title = stringResource(R.string.connect_usb_direct),
+                    subtitle = stringResource(R.string.connect_wired),
                     icon = Icons.Rounded.Usb,
                     color = accentBlue,
                     onClick = onUsbConnect,
@@ -213,8 +214,8 @@ fun CategorySelection(
                     subTextColor = subTextColor
                 )
                 ConnectionOptionCard(
-                    title = "QR SCAN",
-                    subtitle = "INSTANT SYNC",
+                    title = stringResource(R.string.connect_qr),
+                    subtitle = stringResource(R.string.connect_instant_sync),
                     icon = Icons.Rounded.QrCodeScanner,
                     color = accentBlue,
                     onClick = onQrScan,
@@ -234,7 +235,7 @@ fun CategorySelection(
                 .background(if(isLight) Color.Black.copy(alpha=0.05f) else Color.White.copy(alpha=0.05f), CircleShape)
                 .border(1.dp, if(isLight) Color.Black.copy(alpha=0.1f) else Color.White.copy(alpha=0.1f), CircleShape)
         ) {
-            Icon(Icons.Default.Close, "Close", tint = contentColor.copy(alpha=0.6f))
+            Icon(Icons.Default.Close, stringResource(R.string.action_close), tint = contentColor.copy(alpha=0.6f))
         }
     }
 }
@@ -297,8 +298,8 @@ fun ScanningScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text("DEVICES", color = contentColor, fontWeight = FontWeight.Black, fontSize = 14.sp, letterSpacing = 2.sp)
-                        Text("DETECTED IN RADAR", color = subTextColor, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.connect_devices), color = contentColor, fontWeight = FontWeight.Black, fontSize = 14.sp, letterSpacing = 2.sp)
+                        Text(stringResource(R.string.connect_detected), color = subTextColor, fontSize = 8.sp, fontWeight = FontWeight.Bold)
                     }
                     
                     if (foundDevices.isNotEmpty()) {
@@ -356,7 +357,7 @@ fun ScanningScreen(
                     ) {
                         Icon(Icons.Default.AddLink, null, tint = contentColor.copy(alpha=0.4f), modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("MANUAL IP OVERRIDE", color = contentColor.copy(alpha=0.6f), fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                        Text(stringResource(R.string.connect_manual_override), color = contentColor.copy(alpha=0.6f), fontWeight = FontWeight.Bold, fontSize = 10.sp)
                     }
                 }
             }
@@ -505,6 +506,9 @@ fun DeviceItem(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
+                    // Matched against the *hostname* Windows reports, not against
+                    // anything the user reads — translating it would stop a Polish
+                    // phone recognising a PC called "DESKTOP-4F2K1".
                     if (device.name.contains("DESKTOP", true)) Icons.Default.DesktopWindows else Icons.Default.Computer,
                     null,
                     tint = contentColor.copy(alpha=0.6f),
@@ -586,17 +590,17 @@ fun ManualIpDialog(
         onDismissRequest = onDismiss,
         containerColor = cardBg,
         title = {
-            Text("Enter Host IP", color = contentColor, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.connect_enter_host), color = contentColor, fontWeight = FontWeight.Bold)
         },
         text = {
             OutlinedTextField(
                 value = ipText,
                 onValueChange = { ipText = it },
-                label = { Text("IP Address") },
+                label = { Text(stringResource(R.string.connect_ip_label)) },
                 isError = ipText.isNotEmpty() && !isValid,
                 supportingText = {
                     if (ipText.isNotEmpty() && !isValid) {
-                        Text("Enter an IPv4 address, e.g. 192.168.1.20", color = Color(0xFFEF4444), fontSize = 11.sp)
+                        Text(stringResource(R.string.connect_ip_hint), color = Color(0xFFEF4444), fontSize = 11.sp)
                     }
                 },
                 singleLine = true,
@@ -617,12 +621,12 @@ fun ManualIpDialog(
                 onClick = { if (isValid) onConnect(ipText) },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2979FF))
             ) {
-                Text("Connect", color = Color.White)
+                Text(stringResource(R.string.action_connect), color = Color.White)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = contentColor.copy(alpha = 0.6f))
+                Text(stringResource(R.string.action_cancel), color = contentColor.copy(alpha = 0.6f))
             }
         }
     )

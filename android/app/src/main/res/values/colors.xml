@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The darkest stop of the play surface's gradient, so the seam is invisible. -->
+    <color name="window_background">#0B0F16</color>
+</resources>

@@ -23,6 +23,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -68,7 +69,7 @@ fun LayoutManagerScreen(
     val displayLayouts = layouts.mapIndexed { index, name ->
         LayoutItem(
             title = name,
-            lastUsed = "Saved", // Placeholder for now
+            lastUsed = stringResource(R.string.layouts_saved), // Placeholder for now
             isActive = name == activeProfile,
             gradientColors = if(index % 2 == 0) listOf(Color(0xFF8B5CF6), Color(0xFF3B82F6)) else listOf(Color(0xFF10B981), Color(0xFF064E3B))
         )
@@ -99,7 +100,7 @@ fun LayoutManagerScreen(
                 ) {
                     Icon(
                         Icons.Filled.ArrowBack, 
-                        contentDescription = "Back", 
+                        contentDescription = stringResource(R.string.action_back), 
                         tint = if(isLight) Color.Black else Color.White
                     )
                 }
@@ -143,7 +144,7 @@ fun LayoutManagerScreen(
             ) {
                 Icon(Icons.Filled.Add, null, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Create New", fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.layouts_create), fontWeight = FontWeight.Bold)
             }
         }
         
@@ -157,7 +158,7 @@ fun LayoutManagerScreen(
         
         showRenameDialog?.let { oldName ->
             InputDialog(
-                title = "Rename Layout",
+                title = stringResource(R.string.layouts_rename_title),
                 initialValue = oldName,
                 isLight = isLight,
                 onDismiss = { showRenameDialog = null },
@@ -248,7 +249,7 @@ fun LayoutCard(
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                "ACTIVE",
+                                stringResource(R.string.layouts_active),
                                 color = PrimaryBlue,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
@@ -264,7 +265,7 @@ fun LayoutCard(
                     Icon(Icons.Filled.Schedule, null, tint = Color.Gray, modifier = Modifier.size(12.dp))
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        "Last used: ${item.lastUsed}",
+                        stringResource(R.string.layouts_last_used, item.lastUsed),
                         color = Color.Gray,
                         fontSize = 12.sp
                     )
@@ -293,7 +294,7 @@ fun LayoutCard(
                     modifier = Modifier.background(if(isLight) Color.White else SurfaceDarker)
                 ) {
                     DropdownMenuItem(
-                        text = { Text("Edit Designer", color = if(isLight) Color.Black else Color.White) },
+                        text = { Text(stringResource(R.string.layouts_open_designer), color = if(isLight) Color.Black else Color.White) },
                         onClick = { 
                             showMenu = false 
                             onEdit()
@@ -301,7 +302,7 @@ fun LayoutCard(
                         leadingIcon = { Icon(Icons.Filled.Edit, null, tint = if(isLight) Color.Gray else Color.White) }
                     )
                     DropdownMenuItem(
-                        text = { Text("Rename", color = if(isLight) Color.Black else Color.White) },
+                        text = { Text(stringResource(R.string.layouts_rename), color = if(isLight) Color.Black else Color.White) },
                         onClick = { 
                             showMenu = false 
                             onRename()
@@ -309,7 +310,7 @@ fun LayoutCard(
                         leadingIcon = { Icon(Icons.Filled.List, null, tint = if(isLight) Color.Gray else Color.White) }
                     )
                     DropdownMenuItem(
-                        text = { Text("Delete", color = Color.Red) },
+                        text = { Text(stringResource(R.string.layouts_delete), color = Color.Red) },
                         onClick = { 
                             showMenu = false 
                             onDelete()
@@ -358,12 +359,12 @@ fun InputDialog(
                 onClick = { if(text.isNotBlank()) onConfirm(text) },
                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
             ) {
-                Text("Confirm", color = Color.White)
+                Text(stringResource(R.string.action_confirm), color = Color.White)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = if(isLight) Color.Gray else Color.White.copy(alpha=0.7f))
+                Text(stringResource(R.string.action_cancel), color = if(isLight) Color.Gray else Color.White.copy(alpha=0.7f))
             }
         },
         containerColor = if(isLight) Color.White else SurfaceDark,

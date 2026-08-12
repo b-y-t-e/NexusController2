@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
@@ -179,7 +180,7 @@ fun RacingDashboard(speed: Int, gear: Int) {
                     fontFamily = FontFamily.Monospace
                 )
                 Text(
-                    "GEAR",
+                    stringResource(R.string.racing_gear),
                     Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
                     fontSize = 9.sp,
                     color = Color.Gray,

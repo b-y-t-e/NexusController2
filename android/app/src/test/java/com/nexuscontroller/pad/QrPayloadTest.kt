@@ -38,6 +38,18 @@ class QrPayloadTest {
         assertEquals("", t.token)
     }
 
+    /**
+     * The PC really does emit this when "Require pairing token" is off (§8), so
+     * refusing it made the QR code unusable in that mode.
+     */
+    @Test
+    fun `an empty token means the server does not require pairing`() {
+        val t = QrPayload.parse("NEXUSPAD2:192.168.1.20:6000:")!!
+        assertEquals("192.168.1.20", t.ip)
+        assertEquals(6000, t.port)
+        assertEquals("", t.token)
+    }
+
     @Test
     fun `garbage is rejected`() {
         listOf(
@@ -56,7 +68,6 @@ class QrPayloadTest {
             "NEXUSPAD2:192.168.1.20:99999:$token",
             "NEXUSPAD2:192.168.1.20:abc:$token",
             "NEXUSPAD2:192.168.1.20:6000:not-hex!",
-            "NEXUSPAD2:192.168.1.20:6000:",                // empty token
             "NEXUSPAD2:192.168.1.20:6000:${"a".repeat(65)}" // token too long
         ).forEach { assertNull("should reject: $it", QrPayload.parse(it)) }
     }

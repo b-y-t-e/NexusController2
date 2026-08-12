@@ -19,6 +19,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -52,8 +53,19 @@ data class SettingsState(
     val autoReconnect: Boolean = true,
     val deviceName: String = "Player 1",
     val touchSensitivity: Float = 1.0f,
-    val controllerType: ControllerType = ControllerType.XBOX360
+    val controllerType: ControllerType = ControllerType.XBOX360,
+    /** Guide must be held rather than tapped. On by default — see PSCenterButton. */
+    val guideHold: Boolean = true
 )
+
+/**
+ * Tab identities. Deliberately not the visible labels: those are translated, and
+ * a `when` branching on a translated string picks the wrong arm the moment the
+ * phone is not in English.
+ */
+private const val TAB_CONTROLS = "controls"
+private const val TAB_VISUALS = "visuals"
+private const val TAB_ACCOUNT = "account"
 
 @Composable
 fun SettingsScreen(
@@ -68,6 +80,7 @@ fun SettingsScreen(
     onGyroSensitivityChange: (Float) -> Unit,
     onCalibrateGyro: () -> Unit, // New Param
     onTouchVibrationToggle: (Boolean) -> Unit,
+    onGuideHoldToggle: (Boolean) -> Unit,
     onAutoReconnectToggle: (Boolean) -> Unit,
     onDeviceNameChange: (String) -> Unit,
     onTouchSensitivityChange: (Float) -> Unit,
@@ -98,7 +111,9 @@ fun SettingsScreen(
             CarbonBackgroundPattern()
         }
 
-        var currentTab by remember { mutableStateOf("Controls") }
+        // Identity, not text: the tab drives a `when`, so translating the key would
+        // silently send a Polish phone to the fallback branch.
+        var currentTab by remember { mutableStateOf(TAB_CONTROLS) }
 
         val isLightMode = state.themeMode == "Light"
         val textColor = if(isLightMode) Color(0xFF0D47A1) else Color.White
@@ -135,6 +150,7 @@ fun SettingsScreen(
                     onGyroSensitivityChange = onGyroSensitivityChange,
                     onCalibrateGyro = onCalibrateGyro,
                     onTouchVibrationToggle = onTouchVibrationToggle,
+                    onGuideHoldToggle = onGuideHoldToggle,
                     onAutoReconnectToggle = onAutoReconnectToggle,
                     onDeviceNameChange = onDeviceNameChange,
                     onTouchSensitivityChange = onTouchSensitivityChange,
@@ -212,12 +228,12 @@ fun SettingsSidebar(
                 ) {
                 Icon(
                     Icons.Rounded.ArrowBack,
-                    contentDescription = "Back",
+                    contentDescription = stringResource(R.string.action_back),
                     tint = textColor
                 )
             }
             Text(
-                "Settings",
+                stringResource(R.string.settings_title),
                 color = textColor,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
@@ -229,18 +245,18 @@ fun SettingsSidebar(
         // Navigation Items
         Column(modifier = Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val tabs = listOf(
-                "Controls" to Icons.Rounded.SportsEsports,
-                "Visuals" to Icons.Rounded.Visibility,
-                "Account" to Icons.Rounded.AccountCircle
+                Triple(TAB_CONTROLS, stringResource(R.string.settings_controls), Icons.Rounded.SportsEsports),
+                Triple(TAB_VISUALS, stringResource(R.string.settings_visuals), Icons.Rounded.Visibility),
+                Triple(TAB_ACCOUNT, stringResource(R.string.settings_account), Icons.Rounded.AccountCircle)
             )
-            
-            tabs.forEach { (label, icon) ->
+
+            tabs.forEach { (key, label, icon) ->
                 SettingsNavItem(
-                    label = label, 
-                    icon = icon, 
-                    isActive = currentTab == label, 
+                    label = label,
+                    icon = icon,
+                    isActive = currentTab == key,
                     textColor = textColor,
-                    onClick = { onTabSelected(label) }
+                    onClick = { onTabSelected(key) }
                 )
             }
         }
@@ -265,7 +281,7 @@ fun SettingsSidebar(
                     tint = Color.Red.copy(alpha = 0.7f)
                 )
                 Text(
-                    "Reset Defaults",
+                    stringResource(R.string.settings_reset),
                     color = Color.Red.copy(alpha = 0.7f),
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp
@@ -322,6 +338,7 @@ fun SettingsContent(
     onGyroSensitivityChange: (Float) -> Unit,
     onCalibrateGyro: () -> Unit, // New Param
     onTouchVibrationToggle: (Boolean) -> Unit,
+    onGuideHoldToggle: (Boolean) -> Unit,
     onAutoReconnectToggle: (Boolean) -> Unit,
     onDeviceNameChange: (String) -> Unit,
     onTouchSensitivityChange: (Float) -> Unit,
@@ -340,9 +357,9 @@ fun SettingsContent(
             .verticalScroll(rememberScrollState()) 
     ) {
         when (currentTab) {
-            "Visuals" -> {
+            TAB_VISUALS -> {
                 // VISUALS SECTION
-                SettingsSectionHeader("Theme Settings", contentTextColor)
+                SettingsSectionHeader(stringResource(R.string.settings_theme), contentTextColor)
                 // Theme Toggle
                 Row(
                     modifier = Modifier
@@ -360,17 +377,19 @@ fun SettingsContent(
                             .padding(6.dp)
                     ) {
                         Row(modifier = Modifier.fillMaxSize()) {
-                            ThemeRadioButton("Dark", selected = state.themeMode == "Dark", modifier = Modifier.weight(1f), isLightMode) { onThemeChange("Dark") }
-                            ThemeRadioButton("Neon", selected = state.themeMode == "Neon", modifier = Modifier.weight(1f), isLightMode) { onThemeChange("Neon") }
-                            ThemeRadioButton("Light", selected = state.themeMode == "Light", modifier = Modifier.weight(1f), isLightMode) { onThemeChange("Light") }
+                            // Label translated, key never: the theme name is also
+                            // what gets stored and compared against.
+                            ThemeRadioButton(stringResource(R.string.theme_dark), selected = state.themeMode == "Dark", modifier = Modifier.weight(1f), isLightMode) { onThemeChange("Dark") }
+                            ThemeRadioButton(stringResource(R.string.theme_neon), selected = state.themeMode == "Neon", modifier = Modifier.weight(1f), isLightMode) { onThemeChange("Neon") }
+                            ThemeRadioButton(stringResource(R.string.theme_light), selected = state.themeMode == "Light", modifier = Modifier.weight(1f), isLightMode) { onThemeChange("Light") }
                         }
                     }
                 }
                 
-                SettingsSectionHeader("Display", contentTextColor)
+                SettingsSectionHeader(stringResource(R.string.settings_display), contentTextColor)
                 SettingsToggleItem(
-                    title = "Keep Screen On",
-                    subtitle = "Prevents device from sleeping",
+                    title = stringResource(R.string.settings_keep_awake),
+                    subtitle = stringResource(R.string.settings_keep_awake_hint),
                     icon = Icons.Rounded.Smartphone,
                     checked = state.keepScreenOn,
                     onCheckedChange = onScreenOnToggle,
@@ -379,11 +398,11 @@ fun SettingsContent(
                     borderColor = borderColor
                 )
             }
-            "Controls" -> {
+            TAB_CONTROLS -> {
                 // CONTROLS SECTION
-                SettingsSectionHeader("Controller Type", contentTextColor)
+                SettingsSectionHeader(stringResource(R.string.settings_controller_type), contentTextColor)
                 Text(
-                    "The PC emulates this device. Changing it reconnects the pad.",
+                    stringResource(R.string.settings_controller_type_hint),
                     color = contentTextColor.copy(alpha = 0.5f),
                     fontSize = 12.sp
                 )
@@ -416,10 +435,23 @@ fun SettingsContent(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                SettingsSectionHeader("Haptics", contentTextColor)
                 SettingsToggleItem(
-                    title = "Haptic Feedback",
-                    subtitle = "Vibrate on key press",
+                    title = stringResource(R.string.settings_guide_hold),
+                    subtitle = stringResource(R.string.settings_guide_hold_hint),
+                    icon = Icons.Rounded.TouchApp,
+                    checked = state.guideHold,
+                    onCheckedChange = onGuideHoldToggle,
+                    textColor = contentTextColor,
+                    containerColor = containerColor,
+                    borderColor = borderColor
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                SettingsSectionHeader(stringResource(R.string.settings_haptics), contentTextColor)
+                SettingsToggleItem(
+                    title = stringResource(R.string.settings_haptic_feedback),
+                    subtitle = stringResource(R.string.settings_haptic_feedback_hint),
                     icon = Icons.Rounded.Vibration,
                     checked = state.touchVibration, 
                     onCheckedChange = onTouchVibrationToggle,
@@ -431,8 +463,8 @@ fun SettingsContent(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 SettingsToggleItem(
-                    title = "Rumble (PC Haptics)",
-                    subtitle = "Vibrate when PC sends feedback",
+                    title = stringResource(R.string.settings_rumble),
+                    subtitle = stringResource(R.string.settings_rumble_hint),
                     icon = Icons.Rounded.Vibration,
                     checked = state.hapticEnabled,
                     onCheckedChange = onHapticToggle,
@@ -444,15 +476,15 @@ fun SettingsContent(
                 // Show Slider if ANY haptics are enabled
                 if (state.touchVibration || state.hapticEnabled) {
                      Spacer(modifier = Modifier.height(16.dp))
-                     Text("Haptic Intensity: ${(state.hapticStrength * 100).toInt()}%", color = contentTextColor, fontSize = 14.sp)
+                     Text(stringResource(R.string.settings_haptic_intensity, (state.hapticStrength * 100).toInt()), color = contentTextColor, fontSize = 14.sp)
                      Spacer(modifier = Modifier.height(8.dp))
                      CustomSlider(value = state.hapticStrength, onValueChange = onHapticStrengthChange, enabled = true, trackColor = if(isLightMode) Color.Black.copy(alpha=0.1f) else Color.White.copy(alpha=0.1f))
                 }
                 
                 Spacer(modifier = Modifier.height(24.dp))
                 
-                SettingsSectionHeader("Trackpad", contentTextColor)
-                Text("Touch Sensitivity: ${String.format("%.1f", state.touchSensitivity)}x", color = contentTextColor, fontSize = 14.sp)
+                SettingsSectionHeader(stringResource(R.string.settings_trackpad), contentTextColor)
+                Text(stringResource(R.string.settings_touch_sensitivity, String.format("%.1fx", state.touchSensitivity)), color = contentTextColor, fontSize = 14.sp)
                 Spacer(modifier = Modifier.height(8.dp))
                 CustomSlider(
                     value = (state.touchSensitivity - 0.1f) / 1.9f, 
@@ -463,10 +495,10 @@ fun SettingsContent(
 
                 Spacer(modifier = Modifier.height(24.dp))
                 
-                SettingsSectionHeader("Connectivity", contentTextColor)
+                SettingsSectionHeader(stringResource(R.string.settings_connectivity), contentTextColor)
                 SettingsToggleItem(
-                    title = "Auto-Reconnect",
-                    subtitle = "Automatically try to re-link",
+                    title = stringResource(R.string.settings_auto_reconnect),
+                    subtitle = stringResource(R.string.settings_auto_reconnect_hint),
                     icon = Icons.Rounded.Link,
                     checked = state.autoReconnect,
                     onCheckedChange = onAutoReconnectToggle,
@@ -477,10 +509,10 @@ fun SettingsContent(
 
                 Spacer(modifier = Modifier.height(24.dp))
                 
-                SettingsSectionHeader("Sensors", contentTextColor)
+                SettingsSectionHeader(stringResource(R.string.settings_sensors), contentTextColor)
                 SettingsToggleItem(
-                    title = "Gyroscope",
-                    subtitle = "Use tilt for steering",
+                    title = stringResource(R.string.settings_gyro),
+                    subtitle = stringResource(R.string.settings_gyro_hint),
                     icon = Icons.Rounded.Explore,
                     checked = state.gyroEnabled,
                     onCheckedChange = onGyroToggle,
@@ -491,7 +523,7 @@ fun SettingsContent(
                 
                 if (state.gyroEnabled) {
                      Spacer(modifier = Modifier.height(16.dp))
-                     Text("Sensitivity: ${(state.gyroSensitivity * 100).toInt()}%", color = contentTextColor, fontSize = 14.sp)
+                     Text(stringResource(R.string.settings_gyro_sensitivity, (state.gyroSensitivity * 100).toInt()), color = contentTextColor, fontSize = 14.sp)
                      Spacer(modifier = Modifier.height(8.dp))
                      CustomSlider(value = state.gyroSensitivity, onValueChange = onGyroSensitivityChange, enabled = true, trackColor = if(isLightMode) Color.Black.copy(alpha=0.1f) else Color.White.copy(alpha=0.1f))
                      
@@ -509,20 +541,20 @@ fun SettingsContent(
                          ) {
                              Icon(Icons.Rounded.CenterFocusWeak, null, modifier=Modifier.size(18.dp))
                              Spacer(Modifier.width(8.dp))
-                             Text("CALIBRATE CENTER", fontWeight = FontWeight.Bold)
+                             Text(stringResource(R.string.settings_calibrate), fontWeight = FontWeight.Bold)
                          }
                      }
                 }
             }
-            "Account" -> {
+            TAB_ACCOUNT -> {
                 // ACCOUNT SECTION
-                SettingsSectionHeader("Device Profile", contentTextColor)
+                SettingsSectionHeader(stringResource(R.string.settings_device_profile), contentTextColor)
                 
                 // TextField for Device Name
                 OutlinedTextField(
                     value = state.deviceName,
                     onValueChange = { onDeviceNameChange(it) },
-                    label = { Text("Device Name") },
+                    label = { Text(stringResource(R.string.settings_device_name)) },
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = contentTextColor,
@@ -537,7 +569,7 @@ fun SettingsContent(
                         IconButton(onClick = { /* MainActivity handles save on every change, but this provides visual confirmation */ }) {
                             Icon(
                                 Icons.Rounded.CheckCircle,
-                                contentDescription = "Save",
+                                contentDescription = stringResource(R.string.action_save),
                                 tint = AppColors.Primary
                             )
                         }

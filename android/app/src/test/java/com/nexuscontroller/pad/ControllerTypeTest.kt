@@ -18,12 +18,33 @@ class ControllerTypeTest {
     }
 
     @Test
-    fun `wire values round trip`() {
-        ControllerType.entries.forEach {
-            assertEquals(it, ControllerType.fromWire(it.wire))
-        }
+    fun `every device type round trips through its wire value`() {
+        listOf(ControllerType.XBOX360, ControllerType.DUALSHOCK4, ControllerType.BUZZ)
+            .forEach { assertEquals(it, ControllerType.fromWire(it.wire)) }
         assertNull(ControllerType.fromWire(3))
         assertNull(ControllerType.fromWire(-1))
+    }
+
+    @Test
+    fun `the picker offers every type, PlayStation faces together`() {
+        assertEquals(ControllerType.entries.toSet(), ControllerType.choices.toSet())
+        val ds4 = ControllerType.choices.indexOf(ControllerType.DUALSHOCK4)
+        val ds3 = ControllerType.choices.indexOf(ControllerType.DUALSHOCK3)
+        assertEquals(1, ds3 - ds4)
+    }
+
+    @Test
+    fun `a face is not a device`() {
+        """A DualShock 3 *is* a DualShock 4 on the wire.
+
+        ViGEmBus has no DS3 target and RPCS3 maps a DS4 onto the PS3 pad itself,
+        so the difference is the labels on the phone, nothing the PC can see. The
+        mapping is deliberately not one-to-one, and 0x01 resolves to the device.
+        """
+        assertEquals(ControllerType.DUALSHOCK4.wire, ControllerType.DUALSHOCK3.wire)
+        assertEquals(ControllerType.DUALSHOCK4, ControllerType.fromWire(0x01))
+        assertTrue(ControllerType.DUALSHOCK3.isPlayStation)
+        assertTrue(ControllerType.DUALSHOCK3.isGamepad)
     }
 
     @Test

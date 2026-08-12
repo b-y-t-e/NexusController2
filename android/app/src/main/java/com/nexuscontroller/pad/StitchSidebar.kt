@@ -3,6 +3,7 @@ package com.nexuscontroller.pad
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,6 +25,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -36,6 +38,8 @@ fun StitchSidebar(
     controllerType: ControllerType,
     onControllerTypeChange: (ControllerType) -> Unit,
     onModeSelect: (Int) -> Unit,
+    isConnected: Boolean,
+    onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onDismiss: () -> Unit,
     onSettingsClick: () -> Unit,
@@ -76,11 +80,22 @@ fun StitchSidebar(
                         .verticalScroll(rememberScrollState())
                         .padding(vertical = 16.dp)
                 ) {
-                    SectionLabel("MODES", contentColor)
+                    SectionLabel(stringResource(R.string.section_controller), contentColor)
+                    ControllerTypeSwitch(
+                        current = controllerType,
+                        isLight = themeMode == "Light",
+                        onSelect = onControllerTypeChange
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Box(modifier = Modifier.padding(horizontal = 24.dp).fillMaxWidth().height(1.dp).background(borderColor))
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    SectionLabel(stringResource(R.string.section_modes), contentColor)
                     
                     ModeItem(
-                        title = "Gamepad Mode",
-                        subtitle = "${controllerType.label} Layout",
+                        title = stringResource(R.string.mode_gamepad),
+                        subtitle = stringResource(R.string.mode_gamepad_hint, controllerType.label),
                         icon = Icons.Rounded.SportsEsports,
                         isActive = currentMode == 0,
                         onClick = { onModeSelect(0) },
@@ -88,8 +103,8 @@ fun StitchSidebar(
                     )
                     
                     ModeItem(
-                        title = "Trackpad Mode",
-                        subtitle = "Mouse & Keyboard",
+                        title = stringResource(R.string.mode_trackpad),
+                        subtitle = stringResource(R.string.mode_trackpad_hint),
                         icon = Icons.Rounded.Mouse,
                         isActive = currentMode == 1,
                         onClick = { onModeSelect(1) },
@@ -97,8 +112,8 @@ fun StitchSidebar(
                     )
                     
                     ModeItem(
-                        title = "Racing Wheel",
-                        subtitle = "Gyro Steering",
+                        title = stringResource(R.string.mode_racing),
+                        subtitle = stringResource(R.string.mode_racing_hint),
                         icon = Icons.Rounded.SportsMotorsports,
                         isActive = currentMode == 2,
                         onClick = { onModeSelect(2) },
@@ -106,8 +121,8 @@ fun StitchSidebar(
                     )
                     
                     ModeItem(
-                        title = "Custom Layouts",
-                        subtitle = "Saved Profiles",
+                        title = stringResource(R.string.mode_layouts),
+                        subtitle = stringResource(R.string.mode_layouts_hint),
                         icon = Icons.Rounded.DashboardCustomize,
                         isActive = false, 
                         onClick = { 
@@ -121,49 +136,57 @@ fun StitchSidebar(
                     Box(modifier = Modifier.padding(horizontal = 24.dp).fillMaxWidth().height(1.dp).background(borderColor))
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    SectionLabel("CONTROLLER", contentColor)
-                    ControllerTypeSwitch(
-                        current = controllerType,
-                        isLight = themeMode == "Light",
-                        onSelect = onControllerTypeChange
-                    )
-
                     Spacer(modifier = Modifier.height(16.dp))
                     Box(modifier = Modifier.padding(horizontal = 24.dp).fillMaxWidth().height(1.dp).background(borderColor))
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    SectionLabel("SYSTEM", contentColor)
+                    SectionLabel(stringResource(R.string.section_system), contentColor)
                     
-                    SystemItem("Settings", Icons.Rounded.Settings, contentColor) {
+                    SystemItem(stringResource(R.string.action_settings), Icons.Rounded.Settings, contentColor) {
                         onSettingsClick()
                         onDismiss()
                     }
-                    SystemItem("About", Icons.Rounded.Info, contentColor) {
+                    SystemItem(stringResource(R.string.action_about), Icons.Rounded.Info, contentColor) {
                          onAboutClick()
                          onDismiss()
                     }
-                    SystemItem("Help", Icons.Rounded.Help, contentColor) {
+                    SystemItem(stringResource(R.string.action_help), Icons.Rounded.Help, contentColor) {
                         onHelpClick()
                         onDismiss()
                     }
                 }
                 
-                // Footer
+                // Footer: the one action that depends on where you actually are.
+                // It used to be a red "Disconnect PC" at all times, offering to
+                // end a session that in most cases had never started.
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(if(themeMode == "Light") Color(0xFFF5F5F5) else Color(0xFF0F1218))
                         .padding(16.dp)
                 ) {
-                    Button(
-                        onClick = onDisconnect,
-                        modifier = Modifier.fillMaxWidth().height(48.dp).border(1.dp, Color.Red.copy(alpha = 0.2f), RoundedCornerShape(8.dp)),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Icon(Icons.Rounded.PowerSettingsNew, "Disconnect", modifier = Modifier.size(16.dp), tint = Color.White)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Disconnect PC", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    if (isConnected) {
+                        Button(
+                            onClick = onDisconnect,
+                            modifier = Modifier.fillMaxWidth().height(48.dp).border(1.dp, Color.Red.copy(alpha = 0.2f), RoundedCornerShape(8.dp)),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Rounded.PowerSettingsNew, "Disconnect", modifier = Modifier.size(16.dp), tint = Color.White)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.action_disconnect_pc), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+                    } else {
+                        // Quiet, because connecting is the ordinary thing to do here
+                        // and red is reserved for the action that undoes something.
+                        OutlinedButton(
+                            onClick = onConnect,
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, accentPrimary.copy(alpha = 0.5f))
+                        ) {
+                            Text(stringResource(R.string.action_connect_pc), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = accentPrimary)
+                        }
                     }
                 }
             }
@@ -188,7 +211,7 @@ private fun ControllerTypeSwitch(
             .background(if (isLight) Color.Black.copy(alpha = 0.05f) else Color.White.copy(alpha = 0.05f))
             .padding(4.dp)
     ) {
-        ControllerType.entries.forEach { type ->
+        ControllerType.choices.forEach { type ->
             val selected = type == current
             Box(
                 modifier = Modifier
@@ -203,6 +226,7 @@ private fun ControllerTypeSwitch(
                     text = when (type) {
                         ControllerType.XBOX360 -> "XBOX"
                         ControllerType.DUALSHOCK4 -> "DS4"
+                        ControllerType.DUALSHOCK3 -> "DS3"
                         ControllerType.BUZZ -> "BUZZ"
                     },
                     color = if (selected) Color.White else if (isLight) Color(0xFF555555) else Color.White.copy(alpha = 0.5f),

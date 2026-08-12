@@ -322,11 +322,15 @@ class ProtocolTest {
     }
 
     @Test
-    fun `reject reasons carry readable messages`() {
-        RejectReason.entries.forEach { assertTrue(it.message.isNotBlank()) }
-        assertTrue(RejectReason.messageFor(0x02).contains("pairing code"))
-        assertTrue(RejectReason.messageFor(0x03).contains("4/4"))
-        assertTrue(RejectReason.messageFor(0x99).contains("0x99"))
+    fun `every reject reason points at a string resource`() {
+        // The text itself lives in strings.xml, translated; what this file can
+        // still guarantee is that each code has a message to resolve at all.
+        // (It also used to promise "4/4" for a server that now holds eight.)
+        RejectReason.entries.forEach { assertTrue(it.messageRes != 0) }
+        assertEquals(
+            RejectReason.entries.size,
+            RejectReason.entries.map { it.messageRes }.toSet().size
+        )
     }
 
     // ---------------------------------------------------------------- discovery

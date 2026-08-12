@@ -1,5 +1,8 @@
 package com.nexuscontroller.pad
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -33,10 +36,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -94,23 +100,25 @@ enum class FacePosition(val mask: Int) {
 /** Per-controller-type labels; the layout component IDs stay the same. */
 object Glyphs {
     fun bumper(type: ControllerType, left: Boolean): String = when (type) {
-        ControllerType.DUALSHOCK4 -> if (left) "L1" else "R1"
+        ControllerType.DUALSHOCK4, ControllerType.DUALSHOCK3 -> if (left) "L1" else "R1"
         else -> if (left) "LB" else "RB"
     }
 
     fun trigger(type: ControllerType, left: Boolean): String = when (type) {
-        ControllerType.DUALSHOCK4 -> if (left) "L2" else "R2"
+        ControllerType.DUALSHOCK4, ControllerType.DUALSHOCK3 -> if (left) "L2" else "R2"
         else -> if (left) "LT" else "RT"
     }
 
     /** `SHARE` component is Back on Xbox, `OPTIONS` is Start. */
     fun center(type: ControllerType, id: String): String = when (type) {
+        // The DualShock 3 kept SELECT and START; the 4 renamed them.
+        ControllerType.DUALSHOCK3 -> if (id == "SHARE") "SELECT" else "START"
         ControllerType.DUALSHOCK4 -> if (id == "SHARE") "SHARE" else "OPTIONS"
         else -> if (id == "SHARE") "BACK" else "START"
     }
 
     fun faceLetter(type: ControllerType, pos: FacePosition): String =
-        if (type == ControllerType.DUALSHOCK4) {
+        if (type.isPlayStation) {
             when (pos) {
                 FacePosition.BOTTOM -> "CROSS"
                 FacePosition.RIGHT -> "CIRCLE"
@@ -127,7 +135,7 @@ object Glyphs {
         }
 
     fun faceColor(type: ControllerType, pos: FacePosition): Color =
-        if (type == ControllerType.DUALSHOCK4) {
+        if (type.isPlayStation) {
             when (pos) {
                 FacePosition.BOTTOM -> Color(0xFF3B82F6)   // cross
                 FacePosition.RIGHT -> Color(0xFFEF4444)    // circle
@@ -319,6 +327,8 @@ fun PSTriggerShape(
     bg: Color,
     txt: Color,
     isLeft: Boolean = label.startsWith("L"),
+    /** A tick when a thumb lands, as the bumpers and the sticks already give. */
+    onVibrate: () -> Unit = {},
     onValue: (Float) -> Unit
 ) {
     var triggerValue by remember { mutableFloatStateOf(0f) }
@@ -336,6 +346,10 @@ fun PSTriggerShape(
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
+                    // Once, on the way down. A trigger reports a value the whole
+                    // time a thumb slides along it, and buzzing on every one of
+                    // those would be a rattle, not feedback.
+                    onVibrate()
                     val height = size.height.toFloat()
                     var y = down.position.y.coerceIn(0f, height)
                     triggerValue = y / height
@@ -449,6 +463,9 @@ fun DpadButton(icon: String, dir: Int, onPress: (Int, Boolean) -> Unit) {
     }
 }
 
+/** How long the Guide button must be held before it fires. */
+const val GUIDE_HOLD_MS = 600L
+
 /**
  * SHARE / OPTIONS / PS (Guide). [label] is already localised for the controller type;
  * [isGuide] selects the big round Guide button styling.
@@ -461,10 +478,17 @@ fun PSCenterButton(
     mask: Int,
     isConnected: Boolean = false,
     isGuide: Boolean = label.uppercase() == "PS" || label.uppercase() == "GUIDE",
+    /** Only meaningful for the Guide button; every other control is a plain tap. */
+    requireHold: Boolean = true,
     onVibrate: () -> Unit,
     onEvent: (Int, Boolean) -> Unit
 ) {
     var isPressed by remember { mutableStateOf(false) }
+    // Guide is held, not tapped. Windows and every launcher treat it as "go
+    // home": one stray touch during a game drops you to the desktop, and it is
+    // in the middle of the pad where a thumb passes. Nothing else on the pad
+    // costs that much to press by accident, so nothing else asks for a hold.
+    var isArming by remember { mutableStateOf(false) }
 
     val accentColor = if (isGuide) {
         if (isConnected) Color(0xFF22C55E) else Color(0xFFEF4444)
@@ -478,18 +502,52 @@ fun PSCenterButton(
                 .clip(if (isGuide) CircleShape else RoundedCornerShape(50))
                 .background(brush = if (isGuide) Brush.linearGradient(listOf(AppColors.SurfaceHighlight, AppColors.Surface)) else Brush.verticalGradient(listOf(AppColors.SurfaceHighlight, AppColors.Surface)))
                 .border(2.dp, if (isGuide && isPressed) accentColor else Color.White.copy(alpha = 0.1f), if (isGuide) CircleShape else RoundedCornerShape(50))
-                .pointerInput(Unit) {
+                .pointerInput(isGuide, requireHold) {
                     detectTapGestures(onPress = {
-                        isPressed = true
-                        onVibrate()
-                        onEvent(mask, true)
-                        tryAwaitRelease()
-                        isPressed = false
-                        onEvent(mask, false)
+                        if (isGuide && requireHold) {
+                            // Held: nothing is sent until the hold completes, so
+                            // letting go early is a cancel, not a press.
+                            isArming = true
+                            val held = withTimeoutOrNull(GUIDE_HOLD_MS) { tryAwaitRelease() } == null
+                            isArming = false
+                            if (held) {
+                                isPressed = true
+                                onVibrate()
+                                onEvent(mask, true)
+                                tryAwaitRelease()
+                                isPressed = false
+                                onEvent(mask, false)
+                            }
+                        } else {
+                            isPressed = true
+                            onVibrate()
+                            onEvent(mask, true)
+                            tryAwaitRelease()
+                            isPressed = false
+                            onEvent(mask, false)
+                        }
                     })
                 },
             contentAlignment = Alignment.Center
         ) {
+            // The ring fills while the hold counts down, so the wait is visible
+            // rather than a button that seems not to work.
+            if (isGuide && isArming) {
+                val sweep by animateFloatAsState(
+                    targetValue = 360f,
+                    animationSpec = tween(GUIDE_HOLD_MS.toInt(), easing = LinearEasing),
+                    label = "guide-arm"
+                )
+                Canvas(Modifier.size(64.dp)) {
+                    drawArc(
+                        color = accentColor,
+                        startAngle = -90f,
+                        sweepAngle = sweep,
+                        useCenter = false,
+                        style = Stroke(width = 6f, cap = StrokeCap.Round)
+                    )
+                }
+            }
             if (isGuide) {
                 Canvas(modifier = Modifier.size(28.dp)) {
                     val c = if (isPressed) Color.White else accentColor
@@ -570,7 +628,7 @@ fun FaceButton(
             },
         contentAlignment = Alignment.Center
     ) {
-        if (type == ControllerType.DUALSHOCK4) {
+        if (type.isPlayStation) {
             Canvas(modifier = Modifier.size(24.dp)) {
                 val c = if (isPressed) Color.White else glowColor
                 val sw = 6f
@@ -606,6 +664,8 @@ fun PSJoystickSimple(
     label: String,
     bg: Color,
     stroke: Color,
+    /** A short tick when a thumb lands on the stick, as every button already gives. */
+    onVibrate: () -> Unit = {},
     onClick: (Boolean) -> Unit = {},
     onMoved: (Float, Float) -> Unit
 ) {
@@ -627,13 +687,17 @@ fun PSJoystickSimple(
                 .fillMaxSize()
                 .pointerInput(Unit) {
                     detectTapGestures(onPress = {
+                        onVibrate()
                         onClick(true)
                         tryAwaitRelease()
                         onClick(false)
                     })
                 }
                 .pointerInput(Unit) {
-                    detectDragGestures(onDragEnd = { knobPosition = Offset.Zero; onMoved(0f, 0f) }, onDrag = { change, dragAmount ->
+                    // A drag that starts on the stick never becomes a tap, so the
+                    // tick has to be given here too or a thumb that goes straight
+                    // into a turn feels nothing at all.
+                    detectDragGestures(onDragStart = { onVibrate() }, onDragEnd = { knobPosition = Offset.Zero; onMoved(0f, 0f) }, onDrag = { change, dragAmount ->
                         change.consume()
                         val radius = containerSize.width / 2f
                         if (radius > 0) {
@@ -656,14 +720,18 @@ fun PSJoystickSimple(
 /**
  * The big red dome on top of a Buzz! buzzer. Sends the semantic RED bit — the PC maps it
  * to XInput RIGHT_SHOULDER for RPCS3.
+ *
+ * Wordless, like the hardware: a dome this size, this red, above four coloured answer
+ * buttons, is not something anyone has to read a label to understand.
  */
 @Composable
-fun BuzzBuzzerButton(onVibrate: () -> Unit, onEvent: (Int, Boolean) -> Unit) {
+fun BuzzBuzzerButton(label: String, onVibrate: () -> Unit, onEvent: (Int, Boolean) -> Unit) {
     var isPressed by remember { mutableStateOf(false) }
     val dome = if (isPressed) AppColors.BuzzRed else AppColors.BuzzRed.copy(alpha = 0.92f)
 
     Box(
         modifier = Modifier
+            .semantics { contentDescription = label }
             .size(190.dp)
             .pointerInput(Unit) {
                 detectTapGestures(onPress = {
@@ -697,21 +765,18 @@ fun BuzzBuzzerButton(onVibrate: () -> Unit, onEvent: (Int, Boolean) -> Unit) {
                     ),
                     CircleShape
                 )
-                .border(2.dp, Color.White.copy(alpha = 0.18f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                "BUZZ",
-                color = Color.White,
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Black,
-                letterSpacing = 3.sp
-            )
-        }
+                .border(2.dp, Color.White.copy(alpha = 0.18f), CircleShape)
+        )
     }
 }
 
-/** One of the four coloured answer buttons below the dome. */
+/**
+ * One of the four coloured answer buttons below the dome.
+ *
+ * [label] is for accessibility only — it is the button's contentDescription, not a caption.
+ * Printing "BLUE" under a blue button tells a sighted player nothing they cannot see, and
+ * four of those turn the bottom of the screen into a row of shouting.
+ */
 @Composable
 fun BuzzAnswerButton(
     label: String,
@@ -721,41 +786,48 @@ fun BuzzAnswerButton(
     onEvent: (Int, Boolean) -> Unit
 ) {
     var isPressed by remember { mutableStateOf(false) }
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            modifier = Modifier
-                .size(84.dp)
-                .shadow(if (isPressed) 18.dp else 6.dp, RoundedCornerShape(18.dp), spotColor = color, ambientColor = color)
-                .clip(RoundedCornerShape(18.dp))
-                .background(
-                    Brush.verticalGradient(
-                        if (isPressed) listOf(color, color) else listOf(color.copy(alpha = 0.85f), color.copy(alpha = 0.55f))
-                    )
-                )
-                .border(2.dp, Color.White.copy(alpha = if (isPressed) 0.5f else 0.15f), RoundedCornerShape(18.dp))
-                .pointerInput(mask) {
-                    detectTapGestures(onPress = {
-                        isPressed = true
-                        onVibrate()
-                        onEvent(mask, true)
-                        tryAwaitRelease()
-                        isPressed = false
-                        onEvent(mask, false)
-                    })
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth(0.55f)
-                    .height(6.dp)
-                    .background(Color.White.copy(alpha = 0.25f), CircleShape)
-                    .align(Alignment.TopCenter)
-                    .offset(y = 12.dp)
+    // The hardware's bar, stood on end. Lying flat it could only ever be as long
+    // as a quarter of the width; upright it uses the screen's height instead, so
+    // four of them fit side by side and each is a far bigger target.
+    Box(
+        modifier = Modifier
+            .semantics { contentDescription = label }
+            .size(width = 60.dp, height = 180.dp)
+            .shadow(
+                if (isPressed) 16.dp else 5.dp,
+                RoundedCornerShape(22.dp),
+                spotColor = color,
+                ambientColor = color
             )
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(label.uppercase(), color = color, fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(
+                Brush.verticalGradient(
+                    if (isPressed) listOf(color, color)
+                    else listOf(color, color.copy(alpha = 0.72f))
+                )
+            )
+            .border(2.dp, Color.White.copy(alpha = if (isPressed) 0.45f else 0.14f), RoundedCornerShape(22.dp))
+            .pointerInput(mask) {
+                detectTapGestures(onPress = {
+                    isPressed = true
+                    onVibrate()
+                    onEvent(mask, true)
+                    tryAwaitRelease()
+                    isPressed = false
+                    onEvent(mask, false)
+                })
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        // The moulded highlight, running down the button's long side.
+        Box(
+            Modifier
+                .fillMaxHeight(0.82f)
+                .width(7.dp)
+                .align(Alignment.CenterStart)
+                .offset(x = 9.dp)
+                .background(Color.White.copy(alpha = 0.22f), CircleShape)
+        )
     }
 }
 

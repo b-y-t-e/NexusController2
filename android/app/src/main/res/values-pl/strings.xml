@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Polski. Wybierany automatycznie przez Androida, gdy telefon jest ustawiony na
+  polski — aplikacja nie ma i nie potrzebuje własnego przełącznika języka.
+
+  Tłumaczenie, nie kalka: komunikaty błędów mówią, co zrobić dalej, i są w tym
+  samym, rzeczowym tonie co wersja angielska.
+-->
+<resources>
+    <string name="first_run_title">Wybierz swój pad</string>
+    <string name="first_run_subtitle">Możesz to zmienić później w menu.</string>
+    <string name="pad_xbox_summary">Działa ze wszystkim</string>
+    <string name="pad_ds4_summary">Do gier z PlayStation</string>
+    <string name="pad_buzz_summary">Przycisk do quizu</string>
+
+    <string name="mode_play">GRAJ</string>
+    <string name="mode_edit">EDYTUJ</string>
+    <string name="mode_save">ZAPISZ</string>
+    <string name="mode_connect">POŁĄCZ</string>
+
+    <string name="section_modes">TRYBY</string>
+    <string name="section_controller">KONTROLER</string>
+    <string name="section_system">SYSTEM</string>
+    <string name="mode_gamepad">Pad</string>
+    <string name="mode_trackpad">Gładzik</string>
+    <string name="mode_racing">Kierownica</string>
+    <string name="mode_layouts">Własne układy</string>
+    <string name="mode_gamepad_hint">Układ %1$s</string>
+    <string name="mode_trackpad_hint">Mysz i klawiatura</string>
+    <string name="mode_racing_hint">Sterowanie żyroskopem</string>
+    <string name="mode_layouts_hint">Zapisane profile</string>
+    <string name="action_settings">Ustawienia</string>
+    <string name="action_about">O aplikacji</string>
+    <string name="action_help">Pomoc</string>
+    <string name="action_connect_pc">Połącz z komputerem</string>
+    <string name="action_disconnect_pc">Rozłącz komputer</string>
+
+    <string name="connect_qr">SKANUJ QR</string>
+    <string name="connect_usb">USB</string>
+    <string name="connect_manual">Podaj adres IP</string>
+    <string name="connect_connected">Połączono jako gracz %1$d</string>
+
+    <string name="error_no_pc">Nie znaleziono komputera. Sprawdź, czy serwer działa i czy port jest otwarty.</string>
+    <string name="error_refused">Serwer odrzucił połączenie. Upewnij się, że aplikacja na komputerze jest uruchomiona.</string>
+    <string name="error_timeout">Przekroczono czas połączenia. Sprawdź adres IP.</string>
+    <string name="error_no_network">Brak sieci. Sprawdź Wi-Fi albo kabel USB.</string>
+    <string name="error_bad_address">Nieprawidłowy adres. Podaj IPv4, np. 192.168.1.20, albo zeskanuj kod QR.</string>
+    <string name="error_bad_qr">To nie jest kod parowania Nexus Controller.</string>
+    <string name="error_scan_failed">Skanowanie nie powiodło się. Spróbuj ponownie albo wpisz adres IP.</string>
+    <string name="notice_layout_from_pc">Układ zaktualizowany z komputera</string>
+    <string name="notice_gyro_calibrated">Skalibrowano środek żyroskopu</string>
+    <string name="notice_server_closed">Rozłączono. Aplikacja na komputerze została zamknięta.</string>
+
+    <string name="connect_title">POŁĄCZ Z KOMPUTEREM</string>
+    <string name="connect_devices">URZĄDZENIA</string>
+    <string name="connect_auto_scan">SKANUJ AUTOMATYCZNIE</string>
+    <string name="connect_instant_sync">NATYCHMIASTOWE ŁĄCZENIE</string>
+    <string name="connect_usb_direct">PRZEZ USB</string>
+    <string name="connect_wired">POŁĄCZENIE KABLOWE</string>
+    <string name="connect_radar">RADAR SIECI</string>
+    <string name="connect_detected">ZNALEZIONE W SIECI</string>
+    <string name="connect_manual_override">ADRES RĘCZNIE</string>
+    <string name="connect_select_interface">WYBIERZ SPOSÓB</string>
+    <string name="connect_enter_host">Podaj adres komputera</string>
+    <string name="connect_ip_label">Adres IP</string>
+    <string name="connect_ip_hint">Podaj adres IPv4, np. 192.168.1.20</string>
+    <string name="action_connect">Połącz</string>
+    <string name="action_cancel">Anuluj</string>
+    <string name="action_close">Zamknij</string>
+    <string name="action_back">Wstecz</string>
+    <string name="action_save">Zapisz</string>
+
+    <string name="settings_title">Ustawienia</string>
+    <string name="settings_device_profile">Profil urządzenia</string>
+    <string name="settings_device_name">Nazwa urządzenia</string>
+    <string name="settings_controller_type">Typ kontrolera</string>
+    <string name="settings_controller_type_hint">Komputer emuluje to urządzenie. Zmiana powoduje ponowne połączenie pada.</string>
+    <string name="settings_connectivity">Połączenie</string>
+    <string name="settings_auto_reconnect">Łącz ponownie automatycznie</string>
+    <string name="settings_auto_reconnect_hint">Sam próbuje odzyskać połączenie</string>
+    <string name="settings_display">Ekran</string>
+    <string name="settings_theme">Motyw</string>
+    <string name="settings_keep_awake">Nie wygaszaj ekranu</string>
+    <string name="settings_keep_awake_hint">Telefon nie zaśnie w trakcie gry</string>
+    <string name="settings_haptics">Wibracje</string>
+    <string name="settings_haptic_feedback">Wibracja przy dotknięciu</string>
+    <string name="settings_haptic_feedback_hint">Reakcja na wciśnięcie przycisku</string>
+    <string name="settings_rumble">Wibracje z gry</string>
+    <string name="settings_rumble_hint">Gdy komputer wysyła efekt wibracji</string>
+    <string name="settings_haptic_intensity">Siła wibracji: %1$d%%</string>
+    <string name="settings_sensors">Czujniki</string>
+    <string name="settings_gyro">Żyroskop</string>
+    <string name="settings_gyro_hint">Sterowanie przechyleniem telefonu</string>
+    <string name="settings_gyro_sensitivity">Czułość: %1$d%%</string>
+    <string name="settings_calibrate">USTAW ŚRODEK</string>
+    <string name="settings_controls">Sterowanie</string>
+    <string name="settings_trackpad">Gładzik</string>
+    <string name="settings_touch_sensitivity">Czułość dotyku: %1$s</string>
+    <string name="settings_reset">Przywróć domyślne</string>
+    <string name="theme_dark">Ciemny</string>
+    <string name="theme_light">Jasny</string>
+    <string name="theme_neon">Neon</string>
+    <string name="settings_visuals">Wygląd</string>
+    <string name="settings_account">Konto</string>
+    <string name="layouts_saved">Zapisane</string>
+    <string name="layouts_active">AKTYWNY</string>
+    <string name="layouts_create">Utwórz nowy</string>
+    <string name="layouts_rename">Zmień nazwę</string>
+    <string name="layouts_rename_title">Zmiana nazwy układu</string>
+    <string name="layouts_delete">Usuń</string>
+    <string name="layouts_open_designer">Otwórz edytor</string>
+    <string name="layouts_last_used">Ostatnio użyty: %1$s</string>
+    <string name="action_confirm">Potwierdź</string>
+
+    <string name="editor_title">Edytor układu</string>
+    <string name="editor_size">ROZMIAR</string>
+    <string name="keyboard_title">Klawiatura zdalna</string>
+    <string name="keyboard_hint">Pisz, aby wysłać do komputera…</string>
+    <string name="keyboard_send">WYŚLIJ</string>
+    <string name="racing_tap_to_centre">DOTKNIJ, BY WYŚRODKOWAĆ</string>
+    <string name="racing_brake">HAMULEC</string>
+    <string name="racing_clutch">SPRZĘGŁO</string>
+    <string name="racing_gear">BIEG</string>
+    <string name="help_title">Rozwiązywanie problemów</string>
+    <string name="help_subtitle">Częste kłopoty i co z nimi zrobić</string>
+    <string name="help_notfound_title">Telefon nie znajduje komputera</string>
+    <string name="help_notfound_subtitle">Nie widać serwera albo łączenie przekracza czas</string>
+    <string name="help_notfound_1">Naciśnij START SERVER na komputerze — pierścień musi pokazywać ONLINE i adres.</string>
+    <string name="help_notfound_2">Oba urządzenia muszą być w tej samej sieci Wi-Fi. Sieć gościnna często blokuje ruch między urządzeniami.</string>
+    <string name="help_notfound_3">Przepuść telefon przez zaporę: TCP 6000 i UDP 6001. Panel na komputerze proponuje zrobić to za Ciebie.</string>
+    <string name="help_notfound_4">Jeśli Windows uznaje tę sieć za publiczną, reguła dla sieci prywatnych jej nie obejmuje. Ustaw sieć jako prywatną albo otwórz port także dla publicznych.</string>
+    <string name="help_notfound_5">Inna zapora (ESET, Norton, Kaspersky) filtruje osobno i potrzebuje własnej reguły.</string>
+    <string name="help_notfound_6">Kabel USB omija to wszystko: włącz debugowanie USB, podłącz telefon, wybierz USB w aplikacji.</string>
+
+    <string name="help_lag_title">Opóźnienia i zacinanie</string>
+    <string name="help_lag_subtitle">Wciśnięcia docierają z opóźnieniem</string>
+    <string name="help_lag_1">Użyj sieci 5 GHz. Pasmo 2,4 GHz jest zwykle zatłoczone.</string>
+    <string name="help_lag_2">Podejdź bliżej routera albo użyj kabla USB — tam nie ma radia w ogóle.</string>
+    <string name="help_lag_3">Nic tu nie przesyła obrazu: aplikacja wysyła kilkaset bajtów na sekundę, więc opóźnienie bierze się z sieci, nie z obciążenia.</string>
+
+    <string name="help_buttons_title">Przyciski nie działają w grze</string>
+    <string name="help_buttons_subtitle">Pad się łączy, ale gra go nie widzi</string>
+    <string name="help_buttons_1">Kliknij okno gry, żeby było aktywne.</string>
+    <string name="help_buttons_2">Sprawdź, czy gra obsługuje pady XInput. Jeśli woli pada PlayStation, przełącz telefon na DualShock 4.</string>
+    <string name="help_buttons_3">Windows pokazuje naraz tylko cztery pady XInput, wspólnie z fizycznymi. Powyżej czterech używaj trybu DualShock 4 — on nie zajmuje slotu.</string>
+    <string name="help_buttons_4">W trybie Buzz ustaw w RPCS3: Settings → I/O → Emulated Buzz devices → 1 controller.</string>
+
+    <string name="help_stuck_title">Dalej nie działa?</string>
+    <string name="help_stuck_body">Log w panelu na komputerze zapisuje każde odrzucone połączenie razem z powodem.</string>
+
+    <string name="about_title">O aplikacji</string>
+    <string name="about_tagline">Zamienia ten telefon w pada Xbox 360, DualShock 4 albo Buzz! dla komputera z Windows — przez Wi-Fi albo kabel USB.</string>
+    <string name="about_how_title">Jak to działa</string>
+    <string name="about_how_body">Telefon wysyła wciśnięcia przez TCP 6000. Komputer zamienia je na wirtualnego pada sterownikiem ViGEmBus, więc gry widzą zwykły gamepad. Nic nie opuszcza Twojej sieci i nic nie jest streamowane.</string>
+    <string name="about_privacy_title">Prywatność</string>
+    <string name="about_privacy_body">Bez kont, bez telemetrii, żadne dane nie wychodzą poza sieć lokalną. Aplikacja rozmawia z jednym komputerem — tym, którego kod parowania zeskanowałeś.</string>
+    <string name="about_source_body">Zbudowane w Jetpack Compose. Kod, licencje i wydania są na GitHubie.</string>
+    <string name="about_releases">WYDANIA NA GITHUBIE</string>
+    <string name="reject_version">Aplikacja na komputerze mówi inną wersją protokołu. Zaktualizuj ją.</string>
+    <string name="reject_token">Nieprawidłowy kod parowania. Zeskanuj kod QR jeszcze raz.</string>
+    <string name="reject_full">Brak wolnego miejsca dla gracza. Odłącz jednego pada albo spróbuj za chwilę.</string>
+    <string name="reject_malformed">Komputer odrzucił połączenie (nieprawidłowe zgłoszenie).</string>
+    <string name="reject_unauthenticated">Komputer odrzucił połączenie (brak uwierzytelnienia).</string>
+    <string name="reject_rate_limited">Za dużo nieudanych prób. Odczekaj minutę i spróbuj ponownie.</string>
+    <string name="reject_unknown">Komputer odrzucił połączenie (kod 0x%1$02X).</string>
+    <string name="error_disconnected">Rozłączono przez komputer.</string>
+    <string name="buzz_dome">Buzz</string>
+    <string name="buzz_blue">Niebieski</string>
+    <string name="buzz_orange">Pomarańczowy</string>
+    <string name="buzz_green">Zielony</string>
+    <string name="buzz_yellow">Żółty</string>
+    <string name="error_connection">Problem z połączeniem. Sprawdź aplikację na komputerze i sieć.</string>
+    <string name="pad_ds3_summary">Opisy z PS3, do RPCS3</string>
+    <string name="settings_guide_hold">Przytrzymaj przycisk Guide</string>
+    <string name="settings_guide_hold_hint">Windows traktuje Guide jak „wróć do pulpitu”, więc wymaga chwili przytrzymania</string>
+</resources>

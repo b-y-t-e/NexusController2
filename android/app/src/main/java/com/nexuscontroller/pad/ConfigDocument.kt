@@ -67,7 +67,9 @@ object ConfigCodec {
     fun encode(doc: ConfigDocument, pretty: Boolean = false): String {
         val root = LinkedHashMap<String, Any?>()
         root["v"] = doc.version
-        doc.type?.let { root["type"] = it.name }
+        // The wire type, not the face: DUALSHOCK3 is a DualShock 4 as far as the
+        // PC is concerned, and a name it does not know would cost the document.
+        doc.type?.let { root["type"] = (ControllerType.fromWire(it.wire) ?: it).name }
         doc.name?.let { root["name"] = it }
         doc.screen?.let {
             root["screen"] = linkedMapOf<String, Any?>("w" to it.width, "h" to it.height)
