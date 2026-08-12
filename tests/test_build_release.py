@@ -183,6 +183,37 @@ class TestModuleCheck:
         with pytest.raises(br.StepFailed):
             br.check_modules("no-such-python-anywhere", {"json": "stdlib"})
 
+    def test_noise_on_stdout_is_not_mistaken_for_a_module_name(self, monkeypatch):
+        """stdout belongs to the interpreter too, not only to our one print.
+
+        A sitecustomize, a conda banner, a warning the interpreter decided to put
+        on stdout — any of them used to be split on commas and looked up in the
+        table of required modules, and the KeyError that followed replaced the
+        careful sentence this function exists to print with a traceback.
+        """
+        def noisy(*args, **kwargs):
+            return subprocess.CompletedProcess(
+                args, 0,
+                stdout=f"conda: activating, base\n{br.PROBE_MARKER}pytest\n",
+                stderr="",
+            )
+
+        monkeypatch.setattr(br.subprocess, "run", noisy)
+        with pytest.raises(br.StepFailed) as excinfo:
+            br.check_modules("python", {"pytest": "requirements-dev.txt"})
+        message = str(excinfo.value)
+        assert "pytest" in message and "requirements-dev.txt" in message
+        assert "conda" not in message
+
+    def test_an_answer_that_never_arrives_is_not_silence(self, monkeypatch):
+        """A probe that exits 0 while printing nothing has told us nothing."""
+        def mute(*args, **kwargs):
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(br.subprocess, "run", mute)
+        with pytest.raises(br.StepFailed):
+            br.check_modules("python", {"pytest": "requirements-dev.txt"})
+
     def test_a_probe_that_crashes_is_not_read_as_success(self, monkeypatch):
         """An interpreter that ran but failed is not an interpreter that has everything.
 

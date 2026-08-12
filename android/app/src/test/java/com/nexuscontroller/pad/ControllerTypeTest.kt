@@ -68,6 +68,22 @@ class ControllerTypeTest {
     }
 
     @Test
+    fun `nor does a push take away the DualShock 4 face`() {
+        """The rule is symmetric, and deliberately so.
+
+        A document naming DUALSHOCK3 could only come from a sender that knows
+        about faces, and honouring it would be tempting — but the same rule read
+        the other way is what protects DS3, and one that fires in only one
+        direction would be a rule nobody could hold in their head. Selecting a
+        face needs a field of its own (PROTOCOL.md §10), not a special case here.
+        """
+        assertEquals(
+            ControllerType.DUALSHOCK4,
+            ControllerType.DUALSHOCK4.faceFor(ControllerType.DUALSHOCK3)
+        )
+    }
+
+    @Test
     fun `a push with no type at all changes nothing`() {
         ControllerType.entries.forEach { assertEquals(it, it.faceFor(null)) }
     }

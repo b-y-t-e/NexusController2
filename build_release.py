@@ -41,6 +41,9 @@ EXE_NAME = "NexusController.exe" if sys.platform == "win32" else "NexusControlle
 # *parent's* directory, not the cwd we hand to subprocess, so it is not found.
 GRADLEW = ANDROID / ("gradlew.bat" if sys.platform == "win32" else "gradlew")
 VENV_PYTHON = ROOT / ".venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+#: Prefix that marks the probe's own line in :func:`check_modules`, so its answer
+#: can be told apart from anything else the interpreter decides to print.
+PROBE_MARKER = "nexus-modules:"
 #: What the build genuinely cannot proceed without, and how to get it.
 REQUIRED_MODULES = {
     "pytest": "requirements-dev.txt",
@@ -70,10 +73,13 @@ def interpreter() -> str:
 
 def check_modules(python: str, needed: dict[str, str]) -> None:
     """Fail early, and by name, when the build environment is incomplete."""
+    # Marked, because stdout is not ours alone: a sitecustomize, a conda banner or
+    # a warning printed by the interpreter itself all land here, and an unmarked
+    # answer would be indistinguishable from that noise. Anything else is ignored.
     probe = (
         "import importlib.util,sys;"
         f"missing=[m for m in {sorted(needed)!r} if importlib.util.find_spec(m) is None];"
-        "print(','.join(missing))"
+        f"print('{PROBE_MARKER}' + ','.join(missing))"
     )
     try:
         result = subprocess.run(
@@ -90,9 +96,22 @@ def check_modules(python: str, needed: dict[str, str]) -> None:
             f"{python} could not be asked what it has installed "
             f"(exit {result.returncode}): {detail[-1] if detail else 'no output'}"
         )
-    missing = [name for name in result.stdout.strip().split(",") if name]
+    answers = [
+        line[len(PROBE_MARKER):]
+        for line in result.stdout.splitlines()
+        if line.startswith(PROBE_MARKER)
+    ]
+    if not answers:
+        raise StepFailed(
+            f"{python} ran but did not answer what it has installed — "
+            f"expected a line starting with {PROBE_MARKER!r}"
+        )
+    # needed.get, not needed[]: the names come from another process's stdout, and
+    # a KeyError here would be a traceback instead of the sentence this function
+    # exists to print. Anything unrecognised is reported as itself.
+    missing = [name for name in answers[-1].split(",") if name]
     if missing:
-        sources = sorted({needed[name] for name in missing})
+        sources = sorted({needed.get(name, "the build environment") for name in missing})
         raise StepFailed(
             f"{python} is missing {', '.join(missing)} — "
             f"install {' and '.join(sources)} into it, or run this script with "

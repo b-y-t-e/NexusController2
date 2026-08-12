@@ -320,7 +320,7 @@ object Protocol {
      * Returns null for anything that is not a well-formed v2 response.
      */
     fun parseDiscoveryResponse(raw: String?): DiscoveredServer? {
-        val line = raw?.trim()?.trimEnd('\u0000') ?: return null
+        val line = raw?.trim() ?: return null
         val parts = line.split('|')
         if (parts.size != 4) return null
         if (parts[0] != DISCOVERY_RESPONSE_PREFIX) return null

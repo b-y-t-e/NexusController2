@@ -366,7 +366,13 @@ class ProtocolTest {
             "NEXUSPAD_SERVER_V2|PC|0|1",           // port out of range
             "NEXUSPAD_SERVER_V2|PC|70000|1",
             "NEXUSPAD_SERVER_V2|PC|6000|2",        // bad flag
-            "garbage"
+            "garbage",
+            // NUL padding. Nothing produces it — the server sends exactly the
+            // bytes it built and the phone decodes exactly the bytes it received
+            // (`String(data, 0, length)`) — and a reply that carries it is not a
+            // reply we should be believing. There used to be a trimEnd here for
+            // it, guarding against a sender that does not exist.
+            "NEXUSPAD_SERVER_V2|PC|6000|1\u0000\u0000"
         ).forEach { assertNull("should reject: $it", Protocol.parseDiscoveryResponse(it)) }
     }
 }

@@ -64,6 +64,11 @@ class Haptics(context: Context) {
      * * [VibrationEffect] arrived in **API 26**, and the legacy flavour installs
      *   back to 21, where the only vibrate() that exists takes a duration.
      */
+    // ObsoleteSdkInt: true of the `modern` flavour, whose minSdk is 28, and false
+    // of `legacy`, which starts at 21 — one source, two minimums, and lint judges
+    // each build on its own. The branch below is what keeps the app alive on
+    // Android 5 to 7; the warning must not be the reason somebody deletes it.
+    @Suppress("ObsoleteSdkInt")
     private fun play(durationMs: Long, amplitude: Int) {
         val v = vibrator ?: return
         if (!available) return

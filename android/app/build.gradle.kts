@@ -27,8 +27,9 @@ android {
      * `modern` is the one to install: API 28 upwards, which is what almost every
      * phone in use runs. `legacy` reaches back to Android 5 for the drawer full
      * of old phones that is exactly where a room of four Buzz buzzers comes from.
-     * Nothing in the code differs — every call newer than API 21 is already
-     * guarded by a SDK_INT check — so the only cost is a second build.
+     * Nothing in the code differs: every call newer than API 21 has to be behind a
+     * SDK_INT check, and `lintLegacyDebug` is what actually enforces that — it was
+     * not true until lint was asked, and the app died on Android 5 to 7.
      */
     flavorDimensions += "api"
     productFlavors {
@@ -69,6 +70,33 @@ android {
     }
     testOptions {
         unitTests.isReturnDefaultValues = true
+    }
+
+    /*
+     * Lint gates the release (`build_release.py` and the tag workflow), so what it
+     * may fail a build for has to be a decision rather than whatever the defaults
+     * happen to be on the day.
+     *
+     * What it is here for: calls to APIs newer than a flavour's minSdk. Those
+     * compile, pass every unit test and work on the phone in your hand, then throw
+     * NoClassDefFoundError on an older one — and that is an Error, so no
+     * `catch (e: Exception)` sees it. That is the check worth stopping a release.
+     *
+     * What must never stop one: verdicts that depend on the calendar or on a
+     * network lookup rather than on this source tree. Left at their defaults, a
+     * library publishing a new version overnight, or a Play deadline passing,
+     * would make a tag unpublishable without a line of ours having changed. They
+     * stay visible as warnings — they are worth reading — but they do not vote.
+     *
+     * Deliberately no baseline: the report is clean, and a baseline is a list of
+     * accepted failures that only ever grows.
+     */
+    lint {
+        abortOnError = true
+        warningsAsErrors = false
+        checkDependencies = false
+        informational += setOf("GradleDependency")
+        warning += setOf("ExpiredTargetSdkVersion", "OldTargetApi")
     }
 }
 

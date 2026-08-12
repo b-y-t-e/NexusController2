@@ -313,6 +313,14 @@ same schema, so a document captured from one phone can be pushed to another.
   wearing and does **not** reconnect. The sender could not have expressed the
   difference, so it cannot have meant to overwrite it — and a needless reconnect
   costs the client its player slot.
+* A receiver may recognise **further names of its own** for those faces — the phone
+  accepts `DUALSHOCK3` — and a value it does not recognise at all is treated as if
+  `type` were absent: the rest of the document still applies and the device is left
+  as it is. Note what follows: **nothing in this section can choose a face.** Every
+  sender writes the wire name, so `DUALSHOCK4` arrives at a phone wearing either
+  PlayStation face and cannot mean "become the other one". A feature that needs to
+  select a face — exporting a layout to a file and importing it elsewhere, say —
+  needs a field of its own rather than a new reading of this one.
 * **`x` and `y` are fractions of the usable screen, `0.0`–`1.0`, and address the
   *centre* of the component.** They are deliberately *not* pixels: a layout authored
   on the PC has to land in the same place on any phone. Values outside the range are

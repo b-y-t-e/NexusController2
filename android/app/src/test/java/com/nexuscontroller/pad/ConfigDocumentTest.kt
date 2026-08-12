@@ -88,6 +88,15 @@ class ConfigDocumentTest {
     }
 
     @Test
+    fun `the decoder also understands the phone's own face names`() {
+        // §10 says a receiver may know further names of its own for faces over
+        // the same wire type. The phone does, and reading one back must not be
+        // an accident of how the lookup happens to be written.
+        val doc = ConfigCodec.parse("""{"v":1,"type":"DUALSHOCK3"}""")
+        assertEquals(ControllerType.DUALSHOCK3, doc?.type)
+    }
+
+    @Test
     fun `every buzz component id survives a round trip`() {
         val layout = LayoutStore.BUZZ_IDS.associateWith { LayoutEntry(0.5f, 0.5f) }
         val parsed = ConfigCodec.parse(
