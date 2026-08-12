@@ -31,14 +31,36 @@ let firewallMessage = null;
 
 /* --- sparkline ---------------------------------------------------------- */
 
+/* Backing-store size is derived from the *card*, never from the canvas itself.
+ *
+ * Reading canvas.clientWidth/Height to decide canvas.width/height is a loop
+ * waiting for a reason to close: the width and height attributes are the
+ * element's intrinsic size, so the moment CSS stops pinning its layout size —
+ * one stray brace in the stylesheet did it — each redraw multiplies the last by
+ * devicePixelRatio. At 100% scaling that is ×1 and nothing happens, which is why
+ * it can sit there unseen; at 125% the canvas reached 10610×3156 in three
+ * seconds, blew past what the compositor will allocate, and rendered as the
+ * broken-image placeholder covering half the dashboard.
+ *
+ * The card's width cannot be pushed by the canvas (see min-width: 0 in the
+ * stylesheet), and the height is a constant here, so neither can feed back.
+ */
+const CHART_HEIGHT = 84;          // keep in step with `.graph canvas` in style.css
+const MAX_BACKING_PX = 8192;      // far above any real window, far below the limit
+
 function drawChart() {
   const canvas = $('chart');
   const ratio = window.devicePixelRatio || 1;
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight || 90;
-  if (canvas.width !== width * ratio || canvas.height !== height * ratio) {
-    canvas.width = width * ratio;
-    canvas.height = height * ratio;
+  const width = Math.max(1, Math.min(canvas.parentElement.clientWidth, MAX_BACKING_PX));
+  const height = CHART_HEIGHT;
+  // Pinned in CSS pixels as well, so the attributes below can never become the
+  // thing that decides how tall the element is drawn.
+  canvas.style.height = height + 'px';
+  const backingW = Math.min(Math.round(width * ratio), MAX_BACKING_PX);
+  const backingH = Math.min(Math.round(height * ratio), MAX_BACKING_PX);
+  if (canvas.width !== backingW || canvas.height !== backingH) {
+    canvas.width = backingW;
+    canvas.height = backingH;
   }
   const ctx = canvas.getContext('2d');
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
