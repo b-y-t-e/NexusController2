@@ -177,4 +177,11 @@
     <string name="pad_ds3_summary">Opisy z PS3, do RPCS3</string>
     <string name="settings_guide_hold">Przytrzymaj przycisk Guide</string>
     <string name="settings_guide_hold_hint">Windows traktuje Guide jak „wróć do pulpitu”, więc wymaga chwili przytrzymania</string>
+    <string name="update_check">SPRAWDŹ AKTUALIZACJE</string>
+    <string name="update_checking">SPRAWDZANIE…</string>
+    <string name="update_install">ZAINSTALUJ %1$s</string>
+    <string name="update_downloading">POBIERANIE %1$d%%</string>
+    <string name="update_installing">INSTALOWANIE…</string>
+    <string name="update_up_to_date">To najnowsza wersja.</string>
+    <string name="update_needs_permission">Android potrzebuje zgody na instalowanie aplikacji z Nexus Controller. Dotknij, aby otworzyć to ustawienie, potem wróć tutaj.</string>
 </resources>

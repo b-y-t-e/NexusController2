@@ -83,6 +83,19 @@ and the pywebview UI thread polling `get_state()`.
   d-pad is an 8-way hat set via `directional_pad()`.
 * In a frozen dataclass, a bare `Final` annotation creates a **field**, not a
   constant. Use `ClassVar`.
+* **A running `.exe` cannot be overwritten or deleted on Windows, but it can be
+  renamed.** That is the whole trick behind updating in place: rename the old one
+  aside, move the new one in, start it, quit; the leftover is deleted on the next
+  start, when nothing holds it. `os.access` is no use for asking whether the
+  directory allows this — under UAC it answers about the DACL, not about the
+  token — so `updates.writable()` finds out by creating a file.
+* **`PackageInstaller` needs a `PendingIntent` that is `FLAG_MUTABLE` from API
+  31**, because the system fills the result into it; on 31 and 32 creating one
+  with neither mutability flag throws. It also does not follow GitHub's redirect
+  to its object store by itself — `HttpURLConnection` stops at a cross-host
+  redirect, so `Updater` follows it by hand, https only.
+* Compose's `BuildConfig` is **off by default in AGP 8**; `buildConfig = true`
+  in `buildFeatures` is what makes `VERSION_NAME` and `FLAVOR` exist.
 * `Modifier.scale`/`rotate` are graphicsLayers and Compose *does* transform
   pointer coordinates, so a gesture inside them receives local-space deltas —
   multiplying pan by scale is correct there.
@@ -122,8 +135,8 @@ and the pywebview UI thread polling `get_state()`.
 
 **Done** — protocol v2 with token pairing; Xbox/DS4/Buzz emulation; 8 players
 (`protocol.MAX_PLAYERS`; only 4 of them can be XInput-backed — see `xinput.py`);
-rumble; offline dashboard; key bindings; XInput capacity detection; 615 server
-tests + 151 Kotlin tests + hardware smoke test.
+rumble; offline dashboard; key bindings; XInput capacity detection; 684 server
+tests + 170 Kotlin tests + hardware smoke test.
 
 **Done, continued** — central configuration (`PROTOCOL.md` §10): live pad preview
 on every player card, drag-and-drop designer, controller-type switch from the PC,
@@ -132,20 +145,21 @@ named profiles, push-to-one and push-to-all. Single-file `.exe` via
 `.github/workflows/release.yml` on a `v*` tag. `build_release.py` in the root runs
 the same steps locally and collects both artefacts into `release/` (gitignored).
 
+**Done, and worth knowing about** — in-app update on both sides, against the
+GitHub releases API (`updates.py`, `UpdateCheck.kt` / `Updater.kt`). The deciding
+half is pure on both sides and the suites never open a socket. Shared rules: an
+asset URL is used only if it starts with our own `releases/download/` prefix; the
+download is checked against the release's `SHA256SUMS.txt`; versions compare
+numerically, never as text; and `/releases/latest` answering 404 means "no
+release yet", not an error — same as being offline, which is a normal state for
+this app and never raises a dialog.
+
 **Next, roughly in order**
 1. Profile library UI: duplicate, rename, import/export a layout as a file.
 2. Latency readout in the dashboard, from the existing PING/PONG sequence numbers.
 3. Snap-to-grid and alignment guides in the designer.
 4. Motion/gyro steering as a first-class mode rather than a racing-wheel special case.
-5. In-app update: both sides ask the GitHub releases API for the latest tag and
-   offer to fetch it. On Windows a running `.exe` cannot be overwritten but *can*
-   be renamed, so the swap is rename-old, move-new, restart; settings live in
-   `%APPDATA%` and survive it. On Android it needs `REQUEST_INSTALL_PACKAGES`,
-   a `FileProvider` and the flavour-matching asset — and it only became possible
-   at all once releases were signed with a stable key. Note `/releases/latest`
-   404s when a repository has no release yet: that is "nothing to update to", not
-   an error.
-6. Authenticode signing for the `.exe`, to stop SmartScreen warning on every
+5. Authenticode signing for the `.exe`, to stop SmartScreen warning on every
    download. Unlike the APK key this one has to be bought, and it is the only
    remaining piece of "signed builds".
 

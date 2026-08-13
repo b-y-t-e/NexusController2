@@ -196,4 +196,11 @@
     <string name="pad_ds3_summary">PS3 labels, for RPCS3</string>
     <string name="settings_guide_hold">Hold the Guide button</string>
     <string name="settings_guide_hold_hint">Windows treats Guide as “go home”, so it asks for a short hold</string>
+    <string name="update_check">CHECK FOR UPDATES</string>
+    <string name="update_checking">CHECKING…</string>
+    <string name="update_install">INSTALL %1$s</string>
+    <string name="update_downloading">DOWNLOADING %1$d%%</string>
+    <string name="update_installing">INSTALLING…</string>
+    <string name="update_up_to_date">This is the latest version.</string>
+    <string name="update_needs_permission">Android needs your permission to install apps from Nexus Controller. Tap to open that setting, then come back.</string>
 </resources>

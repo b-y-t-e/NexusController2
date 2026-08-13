@@ -150,6 +150,11 @@ android {
     }
     buildFeatures {
         compose = true
+        // The app has to know its own version to ask whether a newer one exists,
+        // and its own flavour to download the APK that will actually install on
+        // this phone. Both come from here rather than from a literal somebody has
+        // to remember to bump — see UpdateCheck.
+        buildConfig = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.15"

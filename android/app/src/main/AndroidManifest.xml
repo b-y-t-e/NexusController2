@@ -8,6 +8,11 @@
     <!-- Holds the Wi-Fi radio out of power save while a pad is connected;
          see LowLatencyWifi. Grants no access to anything. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Installing the update the app downloaded from our own GitHub releases.
+         From Android 8 this is granted per-app by the user in Settings, and the
+         install itself is still confirmed by a system dialog — the permission
+         only buys the right to ask. See Updater. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
@@ -25,6 +30,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Where PackageInstaller reports what became of the update. Not
+             exported: the only sender is the system, through the PendingIntent
+             we handed it, and anything else broadcasting this would be telling
+             the app lies about an install that never happened. -->
+        <receiver
+            android:name=".InstallResultReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.nexuscontroller.pad.INSTALL_RESULT" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

@@ -44,6 +44,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import kotlinx.coroutines.launch
 
 private const val RELEASES_URL =
     "https://github.com/b-y-t-e/NexusController2/releases/latest"
@@ -55,6 +56,24 @@ fun AboutScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val isLight = themeMode == "Light"
+
+    // Updating, from this screen only. The check runs when the screen opens and
+    // says nothing when there is nothing to say — an app for playing games in
+    // the same room as the PC has no business interrupting anyone about a point
+    // release.
+    val scope = rememberCoroutineScope()
+    val updater = remember { Updater(context) }
+    var updateStatus by remember { mutableStateOf<UpdateStatus>(UpdateStatus.Idle) }
+    DisposableEffect(Unit) {
+        // The confirmation dialog belongs to the system installer, so the outcome
+        // comes back through a broadcast rather than from the call.
+        InstallResultReceiver.listener = { status -> updateStatus = status }
+        onDispose { InstallResultReceiver.listener = null }
+    }
+    LaunchedEffect(Unit) {
+        updateStatus = UpdateStatus.Checking
+        updateStatus = updater.check(BuildConfig.VERSION_NAME, BuildConfig.FLAVOR)
+    }
     
     // Theme Colors matching the HTML/Tailwind design
     val primaryColor = Color(0xFF0d59f2) // "primary": "#0d59f2"
@@ -144,10 +163,12 @@ fun AboutScreen(
                 buildAnnotatedString {
                     append("VERSION ")
                     withStyle(SpanStyle(color = textColor)) {
-                        append("2.4.0 ")
-                    }
-                    withStyle(SpanStyle(color = primaryColor)) {
-                        append("PRO")
+                        // From the build, not from a literal. This said "2.4.0
+                        // PRO" while the app was 2.0 — harmless as decoration,
+                        // but it is now the number the update check compares
+                        // against, and a wrong one either hides a real update or
+                        // offers one forever.
+                        append(BuildConfig.VERSION_NAME)
                     }
                 },
                 fontSize = 12.sp,
@@ -242,17 +263,30 @@ fun AboutScreen(
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))
                     .background(primaryColor)
-                    // Was an empty onClick under the words "CHECK FOR
-                    // UPDATES" — a button that promised to do something and did
-                    // nothing. It now opens the page the releases are actually on.
-                    .clickable {
-                        runCatching {
-                            context.startActivity(
-                                android.content.Intent(
-                                    android.content.Intent.ACTION_VIEW,
-                                    android.net.Uri.parse(RELEASES_URL)
+                    // Was an empty onClick under the words "CHECK FOR UPDATES" —
+                    // a button that promised to do something and did nothing.
+                    // It now does it: checks, and once there is something to
+                    // install, installs it.
+                    .clickable(enabled = updateStatus.isActionable()) {
+                        val available = updateStatus as? UpdateStatus.Available
+                        when {
+                            available == null -> scope.launch {
+                                updateStatus = UpdateStatus.Checking
+                                updateStatus = updater.check(
+                                    BuildConfig.VERSION_NAME, BuildConfig.FLAVOR
                                 )
-                            )
+                            }
+                            // Asked for once, in Settings, and not by us — from
+                            // Android 8 this permission cannot be requested with
+                            // a dialog. Sending the user there is the whole of
+                            // what an app may do about it.
+                            !updater.canInstallPackages() -> updater.openInstallPermissionSettings()
+                            else -> scope.launch {
+                                updateStatus = UpdateStatus.Downloading(0)
+                                updateStatus = updater.downloadAndInstall(
+                                    available.release, BuildConfig.FLAVOR
+                                ) { percent -> updateStatus = UpdateStatus.Downloading(percent) }
+                            }
                         }
                     }
                     .padding(horizontal = 40.dp, vertical = 16.dp)
@@ -269,7 +303,15 @@ fun AboutScreen(
                         modifier = Modifier.size(20.dp).rotate(rotation.value)
                     )
                     Text(
-                        stringResource(R.string.about_releases),
+                        when (val status = updateStatus) {
+                            is UpdateStatus.Checking -> stringResource(R.string.update_checking)
+                            is UpdateStatus.Available ->
+                                stringResource(R.string.update_install, status.release.version)
+                            is UpdateStatus.Downloading ->
+                                stringResource(R.string.update_downloading, status.percent)
+                            is UpdateStatus.Installing -> stringResource(R.string.update_installing)
+                            else -> stringResource(R.string.update_check)
+                        },
                         color = Color.White,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
@@ -277,6 +319,39 @@ fun AboutScreen(
                     )
                 }
             }
+
+            // What the button cannot say: why there is nothing to install, or why
+            // the last attempt did not work. Silent when there is no news.
+            val note = when (val status = updateStatus) {
+                is UpdateStatus.UpToDate -> stringResource(R.string.update_up_to_date)
+                is UpdateStatus.Failed -> status.message
+                is UpdateStatus.Available ->
+                    if (updater.canInstallPackages()) null
+                    else stringResource(R.string.update_needs_permission)
+                else -> null
+            }
+            if (note != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    note,
+                    color = subTextColor,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 24.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                stringResource(R.string.about_releases),
+                color = subTextColor,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp,
+                modifier = Modifier
+                    .clickable { updater.openReleasesPage() }
+                    .padding(8.dp)
+            )
             
             Spacer(modifier = Modifier.height(16.dp))
             
