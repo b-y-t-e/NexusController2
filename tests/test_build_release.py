@@ -309,4 +309,22 @@ class TestTheWorkflowAgrees:
     def test_the_signing_key_is_required_rather_than_assumed(self):
         """Without the secret, Gradle emits an unsigned APK and says nothing."""
         assert "NEXUS_KEYSTORE_BASE64" in self.WORKFLOW
-        assert "signed by the wrong key" in self.WORKFLOW
+        assert "verify_signatures" in self.WORKFLOW
+
+    def test_the_workflow_checks_signatures_with_this_script_not_its_own_copy(self):
+        """One pin, and one parser to read it with.
+
+        The shell version anchored on "Signer #1" while this script matched any
+        line with a digest in it — and apksigner prints several, including the
+        public key's and one per extra signer. Two rules that can disagree about
+        which line is the certificate are as bad as two fingerprints that can
+        disagree about which key is the release key.
+        """
+        assert "import build_release" in self.WORKFLOW
+        assert "apksigner verify" not in self.WORKFLOW
+        assert "sed -n" not in self.WORKFLOW
+
+    def test_the_pin_is_never_written_out_twice(self):
+        assert self.WORKFLOW.count(br.RELEASE_CERT_SHA256) == 0, (
+            "the workflow should read RELEASE_CERT_SHA256, not carry its own copy"
+        )

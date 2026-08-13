@@ -101,23 +101,27 @@ jobs:
       # release signed by the *wrong* key looks exactly like a correct one until
       # somebody's phone refuses the update — by which point the tag is public.
       - name: Verify the signatures
+        # The same function the local build uses, rather than a second
+        # implementation in shell. One pin was already the rule here; one *parser*
+        # matters just as much, because the two rules had already drifted — the
+        # shell anchored on "Signer #1", the Python matched any line containing a
+        # digest, and apksigner prints several. It also failed open in the one way
+        # that counts: with `sed` in a pipeline the exit status is sed's, so an
+        # apksigner that errored produced an empty digest, and had the expected
+        # value ever been empty too the comparison would have passed.
         run: |
-          # The pin lives in build_release.py, which checks it locally too. Two
-          # copies of a fingerprint are one copy more than can be kept in step,
-          # and the one that drifts is the one nobody reads.
-          EXPECTED=$(python3 -c "import build_release; print(build_release.RELEASE_CERT_SHA256)")
-          # sort -V, not sort: in plain text order "9.0.0" beats "35.0.0", so the
-          # oldest build-tools on the machine would be the one doing the checking.
-          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
-          for apk in staging/*.apk; do
-            digest=$("$apksigner" verify --print-certs "$apk" \
-                     | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
-            echo "$apk: $digest"
-            if [ "$digest" != "$EXPECTED" ]; then
-              echo "::error::$apk is signed by the wrong key"
-              exit 1
-            fi
-          done
+          python3 - <<'PY'
+          import pathlib, sys
+          import build_release
+
+          apks = sorted(pathlib.Path("staging").glob("*.apk"))
+          if len(apks) != 2:
+              sys.exit(f"expected two staged APKs, found {[p.name for p in apks]}")
+          try:
+              build_release.verify_signatures([(p, p.name) for p in apks])
+          except build_release.StepFailed as exc:
+              sys.exit(f"::error::{exc}")
+          PY
 
       - uses: actions/upload-artifact@v4
         with:

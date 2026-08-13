@@ -243,6 +243,40 @@ class TestMain:
         monkeypatch.setattr(pr, "git", FakeGit(status=" M x.py\n"))
         assert pr.main(["patch", "--dry-run"]) == 0
 
+    def test_ctrl_c_during_the_build_puts_the_version_files_back(
+        self, repo, git, answers, monkeypatch, capsys
+    ):
+        """The likeliest way this ever ends early, and every file says the new
+        number by then. Left like that, the bump rides along in whatever gets
+        committed next."""
+        def interrupted(argv=None):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(pr.build_release, "main", interrupted)
+
+        assert pr.main(["minor", "--yes"]) == 130
+
+        assert pr.current_version(repo) == pr.Version(2, 0, 0)
+        assert "put back" in capsys.readouterr().out
+
+    def test_ctrl_c_after_the_tag_says_what_is_in_the_repository(
+        self, repo, git, answers, no_build, monkeypatch, capsys
+    ):
+        """Past the commit there is nothing to put back — only something to say."""
+        real_push = pr.push
+
+        def interrupted(version):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(pr, "push", interrupted)
+
+        assert pr.main(["patch", "--yes", "--no-build"]) == 130
+
+        out = capsys.readouterr().out
+        assert "v2.0.1 is committed and tagged here but not pushed" in out
+        assert "git reset --hard HEAD~1" in out
+        assert real_push is not None
+
     def test_a_tag_already_on_the_remote_stops_it(self, repo, monkeypatch, answers):
         """It has been released. Re-tagging would publish a second thing as it."""
         monkeypatch.setattr(pr, "git", FakeGit(remote_tags="abc123\trefs/tags/v2.1.0\n"))

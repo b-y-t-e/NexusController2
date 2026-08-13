@@ -451,6 +451,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="do not ask anything (for scripts)")
     args = parser.parse_args(argv)
 
+    #: Set as soon as either becomes true, because the interrupt handler below
+    #: has to know how far this got to say anything useful about it.
+    originals: dict[Path, str] | None = None
+    committed = False
+
     try:
         git("rev-parse", "--git-dir")
 
@@ -513,6 +518,7 @@ def main(argv: list[str] | None = None) -> int:
             raise
 
         commit_and_tag(new, include_dirty)
+        committed = True
         if args.no_push:
             log(f"not pushed (--no-push) — `git push origin HEAD {new.tag}` when ready")
             return 0
@@ -521,7 +527,18 @@ def main(argv: list[str] | None = None) -> int:
         log(f"ABORTED — {exc}")
         return 1
     except KeyboardInterrupt:
+        # Ctrl-C during the build is the likeliest way this ever ends early, and
+        # by then every version file says the new number. Leaving them like that
+        # without a word is how a later, unrelated commit carries a version bump
+        # nobody decided to make.
         log("interrupted")
+        if committed:
+            log(f"NOTE: {new.tag} is committed and tagged here but not pushed.")
+            log(f"      Finish with: git push origin HEAD {new.tag}")
+            log(f"      Undo with:   git tag -d {new.tag} && git reset --hard HEAD~1")
+        elif originals is not None:
+            restore(originals)
+            log("the version files were put back")
         return 130
 
     url = release_url()

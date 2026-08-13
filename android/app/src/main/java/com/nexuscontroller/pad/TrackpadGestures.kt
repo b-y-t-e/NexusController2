@@ -17,6 +17,53 @@ sealed interface TrackpadAction {
 }
 
 /**
+ * Which mouse buttons the trackpad is holding down, and on whose behalf.
+ *
+ * Three things press the same two buttons: a gesture on the glass, the optional
+ * button bar, and a tap — which holds its button for 35 ms from a coroutine so
+ * the PC sees a press and a release rather than a single instant. Left to
+ * overwrite one another they take each other's buttons away, and both ways round
+ * were real: a tap landing 35 ms into a "tap and a half" let go of the drag that
+ * had just started, and a bar button held while the surface went away was never
+ * lifted at all, because the gesture machine had never heard of it.
+ *
+ * So the rule is the server's rule, for the same reason (PROTOCOL.md §"INPUT"):
+ * the button is down while **any** source holds it, and only the source that
+ * pressed it can let it go.
+ */
+class HeldButtons {
+    private var byGesture = 0
+    private var byBar = 0
+    private var byTap = 0
+
+    private fun bit(button: MouseButton) = if (button == MouseButton.LEFT) 1 else 2
+
+    fun byGesture(button: MouseButton, down: Boolean) {
+        byGesture = if (down) byGesture or bit(button) else byGesture and bit(button).inv()
+    }
+
+    fun byBar(button: MouseButton, down: Boolean) {
+        byBar = if (down) byBar or bit(button) else byBar and bit(button).inv()
+    }
+
+    fun byTap(button: MouseButton, down: Boolean) {
+        byTap = if (down) byTap or bit(button) else byTap and bit(button).inv()
+    }
+
+    /** Everything held, whoever is holding it. */
+    val mask: Int get() = byGesture or byBar or byTap
+
+    fun isHeld(button: MouseButton): Boolean = mask and bit(button) != 0
+
+    /** Let go of everything, for a surface that is going away. */
+    fun releaseAll() {
+        byGesture = 0
+        byBar = 0
+        byTap = 0
+    }
+}
+
+/**
  * The trackpad's gesture rules, with no Android in them.
  *
  * The rules used to live inside the pointer loop of a composable, where this
@@ -67,15 +114,26 @@ class TrackpadGestures(
 
     /** First finger down. */
     fun begin(now: Long): List<TrackpadAction> {
+        val actions = mutableListOf<TrackpadAction>()
+        // A drag still open at the start of a new gesture means the last one
+        // never ended — Compose can cancel a pointer loop between the first down
+        // and the last up. Left standing it would hold the button on the PC,
+        // and every later two-finger move would be read as part of the drag and
+        // sent as movement, so scrolling would quietly stop working.
+        if (dragging) {
+            dragging = false
+            actions += TrackpadAction.Release(MouseButton.LEFT)
+        }
         maxPointers = 1
         moved = false
         val latched = lastTapEndedAt?.let { now - it <= latchWindowMs } == true
         // Consumed either way: a third touch in quick succession is a new
         // gesture, not a second chance to start dragging.
         lastTapEndedAt = null
-        if (!latched) return emptyList()
+        if (!latched) return actions
         dragging = true
-        return listOf(TrackpadAction.Press(MouseButton.LEFT))
+        actions += TrackpadAction.Press(MouseButton.LEFT)
+        return actions
     }
 
     /**

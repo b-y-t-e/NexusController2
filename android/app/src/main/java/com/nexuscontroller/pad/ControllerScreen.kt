@@ -760,17 +760,14 @@ private fun TrackpadSurface(
     // The buttons currently held down, from either source: the gestures on the
     // glass and the optional bar. Every message carries both, because the wire
     // field is absolute — see PROTOCOL.md §"INPUT".
-    var heldLeft by remember { mutableStateOf(false) }
-    var heldRight by remember { mutableStateOf(false) }
+    val held = remember { HeldButtons() }
+    // A mirror of held.mask for the drawing below: the holder is plain state the
+    // pointer loop writes from, and Compose has to be told when it changes.
+    var heldMask by remember { mutableIntStateOf(0) }
 
-    fun send(dx: Float, dy: Float) = currentMove(dx, dy, heldLeft, heldRight)
-
-    fun hold(button: MouseButton, down: Boolean) {
-        when (button) {
-            MouseButton.LEFT -> heldLeft = down
-            MouseButton.RIGHT -> heldRight = down
-        }
-        send(0f, 0f)
+    fun send(dx: Float, dy: Float) {
+        heldMask = held.mask
+        currentMove(dx, dy, held.isHeld(MouseButton.LEFT), held.isHeld(MouseButton.RIGHT))
     }
 
     fun run(actions: List<TrackpadAction>) {
@@ -779,30 +776,45 @@ private fun TrackpadSurface(
                 is TrackpadAction.Move -> send(action.dx, action.dy)
                 is TrackpadAction.Scroll -> currentScroll(action.dx, action.dy)
                 is TrackpadAction.Press -> {
-                    hold(action.button, true)
+                    held.byGesture(action.button, true)
+                    send(0f, 0f)
                     // The one gesture with no visible cause: say it landed.
                     currentVibrate()
                 }
-                is TrackpadAction.Release -> hold(action.button, false)
+                is TrackpadAction.Release -> {
+                    held.byGesture(action.button, false)
+                    send(0f, 0f)
+                }
                 is TrackpadAction.Tap -> scope.launch {
-                    // Restore rather than clear: the bar may be holding this
-                    // very button while a tap happens on the glass.
-                    val wasHeld = if (action.button == MouseButton.LEFT) heldLeft else heldRight
-                    hold(action.button, true)
+                    // Its own source, so waking up 35 ms later cannot take away a
+                    // button that something else is holding by then — the drag a
+                    // fast "tap and a half" has just started, for instance.
+                    held.byTap(action.button, true)
+                    send(0f, 0f)
                     delay(35)
-                    hold(action.button, wasHeld)
+                    held.byTap(action.button, false)
+                    send(0f, 0f)
                 }
             }
         }
     }
 
-    // A button held by a surface that is going away is a button nobody lifts.
-    DisposableEffect(Unit) { onDispose { run(gestures.cancel()) } }
+    // Everything held, from every source. cancel() alone covered only what the
+    // gesture machine knew about: a bar button held while the surface went away
+    // — a mode change, a disconnect — stayed pressed on the PC, where nothing
+    // recovers from it until the session ends.
+    DisposableEffect(Unit) {
+        onDispose {
+            run(gestures.cancel())
+            held.releaseAll()
+            send(0f, 0f)
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                val dragging = heldLeft || heldRight
+                val dragging = heldMask != 0
                 Canvas(Modifier.fillMaxSize()) {
                     val step = 24.dp.toPx()
                     // The grid brightens while a button is down: the only sign
@@ -863,10 +875,11 @@ private fun TrackpadSurface(
 
             if (showButtonBar) {
                 TrackpadButtonBar(
-                    heldLeft = heldLeft,
-                    heldRight = heldRight,
+                    heldLeft = heldMask and 1 != 0,
+                    heldRight = heldMask and 2 != 0,
                     onHold = { button, down ->
-                        hold(button, down)
+                        held.byBar(button, down)
+                        send(0f, 0f)
                         if (down) currentVibrate()
                     }
                 )

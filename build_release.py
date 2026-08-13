@@ -257,11 +257,22 @@ def certificate_of(apk: Path, tool: Path | None = None) -> str:
             f"{apk.name} did not verify (exit {result.returncode}): "
             f"{detail[-1] if detail else 'no output'}"
         )
-    marker = "certificate SHA-256 digest: "
+    # Anchored on the whole line, and on signer #1 specifically. apksigner also
+    # prints "public key SHA-256 digest", a line for every further signer, and
+    # more of both under v3.1 and a rotation lineage — so a loose "contains"
+    # match reads whichever of those happens to come first and calls it the
+    # certificate. This is the same rule the workflow applies, because the
+    # workflow calls this function.
+    marker = "Signer #1 certificate SHA-256 digest: "
     for line in result.stdout.splitlines():
-        if marker in line:
-            return line.split(marker, 1)[1].strip().lower()
-    raise StepFailed(f"apksigner said nothing about {apk.name}'s certificate")
+        if line.strip().startswith(marker):
+            digest = line.strip()[len(marker):].strip().lower()
+            if digest:
+                return digest
+    raise StepFailed(
+        f"apksigner printed no certificate digest for {apk.name} — "
+        "it may not be signed at all"
+    )
 
 
 def verify_signatures(artefacts: list[tuple[Path, str]]) -> None:
@@ -455,9 +466,46 @@ def _warn_about_foreign_apks(files) -> None:
             log("      it cannot update an installed copy — rebuild or delete it")
 
 
-def check_tooling(want_apk: bool) -> None:
+#: Where Gradle looks for the signing key, in its own order (see build.gradle.kts).
+KEYSTORE_PROPERTIES = ROOT / "android" / "keystore.properties"
+
+
+def signing_is_configured() -> bool:
+    """Whether a signing key is named anywhere Gradle will look.
+
+    Deliberately shallow: whether the file it names is really there, and whether
+    the passwords are right, is Gradle's business and it says so precisely. What
+    this catches is the one case worth catching *early* — nothing configured at
+    all — because the alternative is finding out after a full test run, a lint
+    run and two APK builds.
+    """
+    if os.environ.get("NEXUS_KEYSTORE"):
+        return True
+    if not KEYSTORE_PROPERTIES.is_file():
+        return False
+    for line in KEYSTORE_PROPERTIES.read_text(encoding="utf-8", errors="replace").splitlines():
+        name, _, value = line.partition("=")
+        if name.strip() == "storeFile" and value.strip():
+            return True
+    return False
+
+
+def check_tooling(want_apk: bool, *, release_apk: bool = False) -> None:
     if want_apk and not GRADLEW.is_file():
         raise StepFailed(f"{GRADLEW} is missing")
+    if not (want_apk and release_apk):
+        return
+    # Both of these used to be discovered at the end, after the slow part: the
+    # key when Gradle emitted an unsigned APK, apksigner when there was finally
+    # something to check. Neither answer changes during a build, so neither is
+    # worth waiting for.
+    if not signing_is_configured():
+        raise StepFailed(
+            "no signing key is configured, so the release APKs would be unsigned "
+            f"and unusable. Point {KEYSTORE_PROPERTIES.name} at the key (see "
+            "CLAUDE.md), set NEXUS_KEYSTORE and friends, or build --debug-apk"
+        )
+    apksigner()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -479,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
     started = time.monotonic()
 
     try:
-        check_tooling(want_apk)
+        check_tooling(want_apk, release_apk=not args.debug_apk)
         python = interpreter()
         if want_exe:
             needed = dict(REQUIRED_MODULES)

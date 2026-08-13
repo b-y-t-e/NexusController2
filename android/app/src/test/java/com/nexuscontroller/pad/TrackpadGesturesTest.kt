@@ -161,4 +161,93 @@ class TrackpadGesturesTest {
     fun `cancelling with nothing held says nothing`() {
         assertEquals(emptyList<TrackpadAction>(), machine().cancel())
     }
+
+    @Test
+    fun `a gesture that never ended is let go of by the next one`() {
+        """Compose can cancel a pointer loop between the first down and the last
+        up, and then end() never runs. The button would stay pressed on the PC,
+        and — because a drag is deliberately never a scroll — every later
+        two-finger move would be sent as movement instead of scrolling."""
+        val g = machine()
+        g.begin(1_000)
+        g.end(1_050)
+        g.begin(1_100)                       // latches: dragging
+        assertTrue(g.isDragging)
+
+        // No end(). The next gesture has to clean up after it.
+        assertEquals(listOf(TrackpadAction.Release(MouseButton.LEFT)), g.begin(2_000))
+        assertFalse(g.isDragging)
+
+        val actions = g.update(pointers = 2, dx = 10f, dy = 0f, spread = 90f)
+        assertEquals(listOf(TrackpadAction.Scroll(8f, 0f)), actions)
+    }
+}
+
+class HeldButtonsTest {
+
+    @Test
+    fun `nothing is held to begin with`() {
+        val held = HeldButtons()
+        assertEquals(0, held.mask)
+        assertFalse(held.isHeld(MouseButton.LEFT))
+    }
+
+    @Test
+    fun `a tap ending does not let go of a drag that started meanwhile`() {
+        """The race that broke a fast "tap and a half".
+
+        The tap holds its button for 35 ms from a coroutine. Touch again inside
+        that window and the drag presses the same button — then the tap woke up
+        and put back what it found before, which was "not held", and the
+        selection died a few milliseconds after it began.
+        """
+        val held = HeldButtons()
+        held.byTap(MouseButton.LEFT, true)
+        held.byGesture(MouseButton.LEFT, true)      // the latch, 20 ms later
+
+        held.byTap(MouseButton.LEFT, false)         // the tap's 35 ms are up
+
+        assertTrue("the drag must survive the tap ending", held.isHeld(MouseButton.LEFT))
+    }
+
+    @Test
+    fun `a tap on the glass does not let go of a button held on the bar`() {
+        val held = HeldButtons()
+        held.byBar(MouseButton.LEFT, true)
+        held.byTap(MouseButton.LEFT, true)
+        held.byTap(MouseButton.LEFT, false)
+        assertTrue(held.isHeld(MouseButton.LEFT))
+    }
+
+    @Test
+    fun `the button goes up when the last source lets go`() {
+        val held = HeldButtons()
+        held.byBar(MouseButton.RIGHT, true)
+        held.byTap(MouseButton.RIGHT, true)
+        held.byTap(MouseButton.RIGHT, false)
+        held.byBar(MouseButton.RIGHT, false)
+        assertEquals(0, held.mask)
+    }
+
+    @Test
+    fun `the two buttons are independent`() {
+        val held = HeldButtons()
+        held.byBar(MouseButton.LEFT, true)
+        held.byGesture(MouseButton.RIGHT, true)
+        held.byGesture(MouseButton.RIGHT, false)
+        assertTrue(held.isHeld(MouseButton.LEFT))
+        assertFalse(held.isHeld(MouseButton.RIGHT))
+    }
+
+    @Test
+    fun `releaseAll drops every source at once`() {
+        """For a surface going away: whatever is holding a button, nobody is
+        going to lift it afterwards."""
+        val held = HeldButtons()
+        held.byBar(MouseButton.LEFT, true)
+        held.byGesture(MouseButton.RIGHT, true)
+        held.byTap(MouseButton.LEFT, true)
+        held.releaseAll()
+        assertEquals(0, held.mask)
+    }
 }
