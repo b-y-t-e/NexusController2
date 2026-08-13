@@ -692,7 +692,18 @@ class Api:
                 has_asset=release.url(updates.ASSET_NAME) is not None,
             )
 
-        threading.Thread(target=work, name="update-check", daemon=True).start()
+        try:
+            threading.Thread(target=work, name="update-check", daemon=True).start()
+        except RuntimeError as exc:
+            # Out of OS threads. The state was set to "checking" a few lines up,
+            # and nothing but the worker ever clears it — so without this the
+            # check that never ran would block every later one for the life of
+            # the process, which is the same jam the worker itself guards
+            # against. ControllerServer._accept_loop already treats a thread
+            # that will not start as a real thing to handle rather than a
+            # theoretical one.
+            log.warning("could not start the update check: %s", exc)
+            self._set_update(state="error", error=f"could not start the update check: {exc}")
         return self.update_status()
 
     def install_update(self) -> dict:

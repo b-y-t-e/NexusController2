@@ -4,6 +4,7 @@ The web UI calls these methods across the pywebview bridge, so their return
 shapes are a contract with `web/app.js` and `web/designer.js`.
 """
 
+import threading
 import time
 
 import pytest
@@ -425,6 +426,26 @@ class TestUpdates:
         monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: release)
         api.check_for_update()
         assert _settled(api)["state"] == "available"
+
+    def test_a_check_whose_thread_will_not_start_is_not_left_checking(
+        self, api, monkeypatch
+    ):
+        """The state is set before the worker exists, and only the worker clears it.
+
+        So a thread that cannot start — the machine is out of them, which the
+        accept loop already treats as a real possibility — left "checking" set
+        with nothing running to change it, and every later check returned early
+        for the life of the process.
+        """
+        class RefusesToStart(threading.Thread):
+            def start(self):
+                raise RuntimeError("can't start new thread")
+
+        monkeypatch.setattr("nexus_server.app.threading.Thread", RefusesToStart)
+        status = api.check_for_update()
+
+        assert status["state"] == "error"
+        assert "could not start" in status["error"]
 
     def test_an_unexpected_failure_while_installing_leaves_the_state_usable(
         self, api, monkeypatch, tmp_path
