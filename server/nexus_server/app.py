@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import __version__
+from . import __version__, updates
 from .config import Settings, SettingsStore, generate_token
 from .desktop import DesktopControl, create_backend
 from .devices import DriverUnavailableError, FakeBackend, PadBackend, VGamepadBackend
@@ -87,6 +87,11 @@ class Api:
         self._pps_last_total = 0
         self._pps_last_time = time.monotonic()
         self._pps = 0
+        #: What the dashboard is told about updates; replaced wholesale, never
+        #: mutated in place, so the UI thread reading it never sees a half-written
+        #: answer while the checking thread writes one.
+        self._update: dict = {"state": "idle", "current": __version__}
+        self._update_lock = threading.Lock()
 
     # -- logging ------------------------------------------------------------
 
@@ -618,6 +623,130 @@ class Api:
 
         webbrowser.open(DRIVER_HELP_URL)
 
+    # -- updates ------------------------------------------------------------
+
+    def _set_update(self, **fields) -> dict:
+        """Replace the update state, keeping the parts nobody is changing."""
+        with self._update_lock:
+            state = dict(self._update)
+            state.update(fields)
+            state["current"] = __version__
+            self._update = state
+            return dict(state)
+
+    def update_status(self) -> dict:
+        """What the dashboard shows. Never blocks — the work happens elsewhere."""
+        with self._update_lock:
+            state = dict(self._update)
+        exe = updates.running_executable()
+        state.update(
+            {
+                "enabled": self.settings.check_updates,
+                # Installing needs a real .exe in a directory we may write to. From
+                # a source checkout there is nothing to replace, and under Program
+                # Files the swap needs rights this process does not have — in both
+                # cases the honest answer is a link, not a button that fails.
+                "can_install": exe is not None and updates.writable(exe),
+                "url": updates.RELEASES_PAGE,
+            }
+        )
+        return state
+
+    def check_for_update(self) -> dict:
+        """Ask GitHub, in the background. The answer arrives via :meth:`update_status`."""
+        with self._update_lock:
+            if self._update.get("state") in {"checking", "installing"}:
+                return dict(self._update)
+            self._update = {**self._update, "state": "checking", "error": None}
+
+        def work() -> None:
+            try:
+                release = updates.fetch_latest()
+            except updates.UpdateError as exc:
+                # A failed check is not news. It happens on every start on a
+                # machine with no route to the internet, which is a machine this
+                # app is expressly meant to work on, so it goes to the state the
+                # dashboard can choose to show and not into the log or a dialog.
+                log.info("update check failed: %s", exc)
+                self._set_update(state="error", error=str(exc))
+                return
+            if release is None:
+                self._set_update(state="none", latest=None, error=None)
+                return
+            available = updates.is_newer(__version__, release.version)
+            self._set_update(
+                state="available" if available else "none",
+                latest=release.version,
+                tag=release.tag,
+                notes=release.notes[:2000],
+                error=None,
+                has_asset=release.url(updates.ASSET_NAME) is not None,
+            )
+
+        threading.Thread(target=work, name="update-check", daemon=True).start()
+        return self.update_status()
+
+    def install_update(self) -> dict:
+        """Download the new build, put it in place, start it and ask to be closed.
+
+        Runs to completion before answering: the dashboard's button is disabled
+        while it does, and a download that the user cannot see the end of is worse
+        than one that takes a moment.
+        """
+        exe = updates.running_executable()
+        if exe is None:
+            return {"ok": False, "error": "This is a source checkout — update it with git"}
+        if not updates.writable(exe):
+            return {
+                "ok": False,
+                "error": f"No permission to replace {exe.name} — download it from the releases page",
+            }
+
+        self._set_update(state="installing", error=None)
+        try:
+            release = updates.fetch_latest()
+            if release is None or not updates.is_newer(__version__, release.version):
+                self._set_update(state="none")
+                return {"ok": False, "error": "There is no newer release"}
+            payload = updates.download(release)
+            updates.install(payload, exe)
+            updates.relaunch(exe)
+        except updates.UpdateError as exc:
+            self._append_log(f"Update failed: {exc}")
+            self._set_update(state="error", error=str(exc))
+            return {"ok": False, "error": str(exc)}
+
+        self._set_update(state="installed")
+        self._append_log(f"Updated to {release.version} — restarting")
+        return {"ok": True, "restarting": True, "version": release.version}
+
+    def set_check_updates(self, enabled: bool) -> bool:
+        self.settings.check_updates = bool(enabled)
+        self._persist()
+        if self.settings.check_updates:
+            self.check_for_update()
+        return self.settings.check_updates
+
+    def open_release_page(self) -> None:
+        import webbrowser  # noqa: PLC0415
+
+        webbrowser.open(updates.RELEASES_PAGE)
+
+    def close_window(self) -> None:
+        """Close the dashboard from the page, after the update has been started.
+
+        The new build is already running by the time this is called, and two
+        copies of the app cannot both hold the port — so this is the second half
+        of :meth:`install_update`, not a general-purpose quit button.
+        """
+        try:
+            import webview  # noqa: PLC0415
+
+            for window in list(webview.windows):
+                window.destroy()
+        except Exception:  # noqa: BLE001 - closing must not raise into the page
+            log.exception("could not close the dashboard window")
+
     def shutdown(self) -> None:
         self.server.stop()
 
@@ -652,6 +781,16 @@ def run_gui(simulate: bool = False) -> int:
 
     backend, simulated, driver_error = _make_backend(simulate)
     api = Api(backend, simulated=simulated)
+
+    # Deliberately here and not in Api.__init__. Constructing the API object is
+    # what the suite does hundreds of times, and a constructor that reaches for
+    # GitHub would make the tests depend on the network — and, on a machine
+    # without one, wait for a DNS timeout each time. This is the I/O shell; the
+    # check belongs in it.
+    updates.clear_backup()   # the build the last update replaced; nothing holds it now
+    if api.settings.check_updates:
+        api.check_for_update()
+
     if driver_error:
         api._append_log(f"ViGEmBus driver not available — running in simulation mode: {driver_error}")
     elif simulated:

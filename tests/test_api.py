@@ -4,9 +4,11 @@ The web UI calls these methods across the pywebview bridge, so their return
 shapes are a contract with `web/app.js` and `web/designer.js`.
 """
 
+import time
+
 import pytest
 
-from nexus_server import system
+from nexus_server import system, updates
 from nexus_server.app import Api
 from nexus_server.desktop import FakeDesktop
 from nexus_server.devices import FakeBackend
@@ -355,3 +357,145 @@ class TestSettingsApi:
     def test_test_rumble_on_an_empty_slot(self, api):
         assert api.test_rumble(0) is False
         assert api.test_rumble(99) is False
+
+
+def _settled(api, timeout: float = 2.0) -> dict:
+    """The update state once the background check has finished.
+
+    Polled rather than joined: the thread is deliberately not exposed — the page
+    polls for the answer too, so this is the same contract it has.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = api.update_status()
+        if status["state"] != "checking":
+            return status
+        time.sleep(0.01)
+    raise AssertionError("the update check never finished")
+
+
+class TestUpdates:
+    """The dashboard's half of updating: state the page can render, and no surprises.
+
+    The network is never touched — `tests/test_updates.py` covers what happens on
+    the wire. What matters here is that constructing the API does not reach for
+    it either, that a check runs off the UI thread, and that install refuses the
+    two situations where it cannot work rather than half-doing it.
+    """
+
+    def test_creating_the_api_does_not_call_github(self, tmp_path, monkeypatch):
+        """The suite builds hundreds of these; a check here would be hundreds of
+        DNS timeouts on a machine with no network. It belongs in run_gui()."""
+        monkeypatch.setenv("NEXUS_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr("nexus_server.app.create_backend", lambda: None)
+        called = []
+        monkeypatch.setattr(
+            "nexus_server.updates.fetch_latest", lambda **k: called.append(k) or None
+        )
+        instance = Api(FakeBackend(), simulated=True)
+        try:
+            assert instance.settings.check_updates is True
+            assert called == []
+        finally:
+            instance.shutdown()
+
+    def test_status_starts_idle_and_names_this_build(self, api):
+        from nexus_server import __version__
+
+        status = api.update_status()
+        assert status["state"] == "idle"
+        assert status["current"] == __version__
+        assert status["url"].startswith("https://github.com/")
+
+    def test_a_check_that_finds_a_newer_release(self, api, monkeypatch):
+        release = updates.Release(
+            tag="v99.0.0",
+            assets={"NexusController.exe": updates.DOWNLOAD_PREFIX + "v99.0.0/NexusController.exe"},
+        )
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: release)
+        api.check_for_update()
+        status = _settled(api)
+        assert status["state"] == "available"
+        assert status["latest"] == "99.0.0"
+        assert status["has_asset"] is True
+
+    def test_an_older_release_is_not_offered(self, api, monkeypatch):
+        release = updates.Release(tag="v0.1.0", assets={})
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: release)
+        api.check_for_update()
+        assert _settled(api)["state"] == "none"
+
+    def test_no_releases_at_all_is_not_an_error(self, api, monkeypatch):
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: None)
+        api.check_for_update()
+        assert _settled(api)["state"] == "none"
+
+    def test_being_offline_is_recorded_quietly(self, api, monkeypatch):
+        """No dialog, no log line — this app is meant to work with no internet."""
+        def offline(**kwargs):
+            raise updates.UpdateError("could not reach GitHub")
+
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", offline)
+        api.check_for_update()
+        status = _settled(api)
+        assert status["state"] == "error"
+        assert "GitHub" in status["error"]
+        assert not any("update" in line.lower() for line in api.get_log())
+
+    def test_installing_from_a_source_checkout_is_refused(self, api):
+        """There is no .exe to replace; the page offers the download page instead."""
+        result = api.install_update()
+        assert result["ok"] is False
+        assert "source checkout" in result["error"]
+
+    def test_installing_where_it_cannot_write_is_refused(self, api, tmp_path, monkeypatch):
+        exe = tmp_path / "NexusController.exe"
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.updates.writable", lambda path: False)
+        result = api.install_update()
+        assert result["ok"] is False
+        assert "No permission" in result["error"]
+
+    def test_a_successful_install_swaps_and_relaunches(self, api, tmp_path, monkeypatch):
+        exe = tmp_path / "NexusController.exe"
+        exe.write_bytes(b"old build")
+        release = updates.Release(
+            tag="v99.0.0",
+            assets={"NexusController.exe": updates.DOWNLOAD_PREFIX + "v99.0.0/NexusController.exe"},
+        )
+        started: list = []
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: release)
+        monkeypatch.setattr("nexus_server.updates.download", lambda *a, **k: b"new build")
+        monkeypatch.setattr("nexus_server.updates.relaunch", lambda path, **k: started.append(path))
+
+        result = api.install_update()
+
+        assert result == {"ok": True, "restarting": True, "version": "99.0.0"}
+        assert exe.read_bytes() == b"new build"
+        assert started == [exe]
+        assert api.update_status()["state"] == "installed"
+
+    def test_a_failed_download_leaves_the_build_alone(self, api, tmp_path, monkeypatch):
+        exe = tmp_path / "NexusController.exe"
+        exe.write_bytes(b"old build")
+        release = updates.Release(tag="v99.0.0", assets={})
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: release)
+
+        def refuse(*args, **kwargs):
+            raise updates.UpdateError("does not match its checksum")
+
+        monkeypatch.setattr("nexus_server.updates.download", refuse)
+        result = api.install_update()
+
+        assert result["ok"] is False
+        assert exe.read_bytes() == b"old build"
+        assert api.update_status()["state"] == "error"
+        assert any("Update failed" in line for line in api.get_log())
+
+    def test_the_check_can_be_turned_off_and_is_remembered(self, api, monkeypatch):
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: None)
+        assert api.set_check_updates(False) is False
+        assert api.store.load().check_updates is False
+        assert api.update_status()["enabled"] is False

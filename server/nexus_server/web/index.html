@@ -38,6 +38,12 @@
 
 <div class="banner hidden" id="xinput-banner"></div>
 
+<div class="banner hidden" id="update-banner">
+  <span id="update-text"></span>
+  <button class="btn btn-sm" id="update-install">Download and install</button>
+  <button class="btn btn-sm btn-ghost" id="update-page">Open the releases page</button>
+</div>
+
 <main class="layout">
 
   <section class="col-left">
@@ -114,6 +120,12 @@
         <label class="switch">
           <input type="checkbox" id="haptics-toggle" checked>
           <span>Send rumble to phones</span>
+        </label>
+        <!-- The only thing here that talks to anything outside the LAN, so it is
+             a visible switch rather than a hidden default. -->
+        <label class="switch">
+          <input type="checkbox" id="updates-toggle" checked>
+          <span>Check GitHub for updates on start</span>
         </label>
       </div>
     </div>

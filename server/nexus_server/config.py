@@ -86,6 +86,10 @@ class Settings:
     discovery_enabled: bool = True
     #: Name broadcast in discovery replies; empty means "use the hostname".
     server_name: str = ""
+    #: Ask GitHub on start whether a newer release exists. The only outbound
+    #: connection this app makes; everything else it does is on the LAN. A failed
+    #: check is silent, so turning this off costs nothing but the notice.
+    check_updates: bool = True
     #: Try to add an inbound Windows Firewall rule on start (private profile only).
     manage_firewall: bool = True
     #: Set up ``adb reverse`` for USB mode on start.

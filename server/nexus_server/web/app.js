@@ -470,6 +470,12 @@ function wire() {
   $('firewall-open').addEventListener('click', () => openFirewall(false));
   $('firewall-open-public').addEventListener('click', () => openFirewall(true));
 
+  $('updates-toggle').addEventListener('change', (event) => {
+    api().set_check_updates(event.target.checked).then(refreshUpdate);
+  });
+  $('update-page').addEventListener('click', () => api().open_release_page());
+  $('update-install').addEventListener('click', installUpdate);
+
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('resize', drawChart);
 }
@@ -536,6 +542,54 @@ function refreshFirewall() {
   });
 }
 
+// The check runs in the background on the Python side, so the page asks for the
+// answer a few times rather than waiting for one. Slow and quiet on purpose:
+// there is nothing here worth interrupting anybody for.
+const UPDATE_POLL_MS = 3000;
+
+function refreshUpdate() {
+  return api().update_status().then((status) => {
+    syncCheckbox($('updates-toggle'), status.enabled);
+    const banner = $('update-banner');
+    const available = status.state === 'available' && status.latest;
+    banner.classList.toggle('hidden', !available && status.state !== 'installing');
+
+    if (status.state === 'installing') {
+      $('update-text').textContent = 'Downloading the new version… ';
+      $('update-install').disabled = true;
+      return status;
+    }
+    if (available) {
+      $('update-text').textContent =
+        'Version ' + status.latest + ' is available — you have ' + status.current + '. ';
+      // Nothing to install from a source checkout or from a directory this
+      // process may not write to; the page then offers the download instead.
+      $('update-install').classList.toggle('hidden', !(status.can_install && status.has_asset));
+      $('update-install').disabled = false;
+    }
+    return status;
+  }).catch((error) => {
+    console.warn('update status unavailable:', error);
+  });
+}
+
+function installUpdate() {
+  const button = $('update-install');
+  button.disabled = true;
+  $('update-text').textContent = 'Downloading the new version… ';
+  api().install_update().then((result) => {
+    if (result.ok) {
+      $('update-text').textContent =
+        'Version ' + result.version + ' is installed and starting. This window will close. ';
+      // The new build is already running and wants the port this one holds.
+      setTimeout(() => api().close_window(), 1200);
+      return;
+    }
+    $('update-text').textContent = 'Update failed: ' + result.error + ' ';
+    button.disabled = false;
+  });
+}
+
 window.addEventListener('pywebviewready', () => {
   wire();
   api().get_state().then((state) => {
@@ -543,5 +597,7 @@ window.addEventListener('pywebviewready', () => {
     applyState(state);
   });
   refreshFirewall();
+  refreshUpdate();
   setInterval(poll, POLL_MS);
+  setInterval(refreshUpdate, UPDATE_POLL_MS);
 });
