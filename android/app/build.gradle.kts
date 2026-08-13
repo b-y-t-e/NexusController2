@@ -1,6 +1,71 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+/*
+ * The release signing key, from a local file or from the environment.
+ *
+ * Android refuses to update an installed app when the new APK carries a
+ * different signature, and a debug build is signed with ~/.android/debug.keystore
+ * — a file the CI runner *generates on the spot*, differently on every run. Every
+ * release built that way was therefore an uninstall-and-lose-your-layouts, which
+ * is why in-app updating could not exist. One stable key fixes that, and the key
+ * has to outlive the machine: keep a backup, because losing it means every
+ * installed copy is stranded on the version it has.
+ *
+ * Two sources, same four values. `android/keystore.properties` is this machine
+ * (gitignored, and it only points at a key kept outside the tree); the
+ * environment is CI, where the key arrives as a repository secret. Neither being
+ * present is not an error — a contributor without the key still builds and runs
+ * debug — but then `release` is left unsigned and every path that ships one says
+ * so out loud rather than producing an APK no phone will install.
+ */
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
+fun signingValue(property: String, environment: String): String? =
+    (keystoreProperties.getProperty(property) ?: System.getenv(environment))?.takeIf { it.isNotBlank() }
+
+/**
+ * Why `release` is not going to be signed, or null when it is.
+ *
+ * Three situations, and they used to collapse into one: no key configured at
+ * all, a key configured whose file is not there, and a key whose file is there
+ * with a password missing. All three ended as "unsigned APK", and every one of
+ * them was answered with "point keystore.properties at the key" — advice that is
+ * only right for the first, and actively misleading for the other two, where the
+ * file has been pointed at and the mistake is somewhere else entirely.
+ */
+val signingProblem: String? = run {
+    val configured = signingValue("storeFile", "NEXUS_KEYSTORE")
+        ?: return@run "no signing key is configured (android/keystore.properties, or NEXUS_KEYSTORE)"
+    val store = file(configured)
+    if (!store.isFile) {
+        return@run "the configured signing key is not there: $configured"
+    }
+    val missing = listOf(
+        "storePassword" to signingValue("storePassword", "NEXUS_KEYSTORE_PASSWORD"),
+        "keyAlias" to signingValue("keyAlias", "NEXUS_KEY_ALIAS"),
+        "keyPassword" to signingValue("keyPassword", "NEXUS_KEY_PASSWORD"),
+    ).filter { (_, value) -> value == null }.map { (name, _) -> name }
+    if (missing.isNotEmpty()) {
+        return@run "the signing key at $configured is missing ${missing.joinToString(", ")}"
+    }
+    null
+}
+
+val signingStore: File? =
+    if (signingProblem == null) file(signingValue("storeFile", "NEXUS_KEYSTORE")!!) else null
+
+// Said once, at configuration time, so an interactive build shows the reason
+// too — not only the release script.
+if (signingProblem != null) {
+    logger.lifecycle("Nexus: release builds will be UNSIGNED — $signingProblem")
 }
 
 android {
@@ -44,10 +109,36 @@ android {
         }
     }
 
+    signingConfigs {
+        if (signingStore != null) {
+            create("release") {
+                storeFile = signingStore
+                storePassword = signingValue("storePassword", "NEXUS_KEYSTORE_PASSWORD")
+                keyAlias = signingValue("keyAlias", "NEXUS_KEY_ALIAS")
+                keyPassword = signingValue("keyPassword", "NEXUS_KEY_PASSWORD")
+                // v1 as well as v2 and v3: the legacy flavour installs back to
+                // Android 5, which predates the v2 scheme entirely and would
+                // reject a v2-only APK.
+                //
+                // v3 is not decoration. It is the scheme that carries a rotation
+                // proof, and rotation is the only way out of the situation this
+                // whole signing setup warns about — a lost key strands every
+                // installed copy. A phone can only accept a rotated key if the
+                // copy it already has was signed with v3, so leaving it off (the
+                // AGP default) would mean every release shipped until then can
+                // never be rotated away from.
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
     compileOptions {

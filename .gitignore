@@ -23,6 +23,10 @@ android/.kotlin/
 *.aab
 *.jks
 *.keystore
+# Where this machine's key lives and what unlocks it. The key itself is kept
+# outside the tree (%APPDATA%\NexusController\signing) so a clean checkout
+# cannot delete it; this file only points at it.
+android/keystore.properties
 # The Gradle wrapper jar must be committed — without it gradlew cannot bootstrap.
 !gradle/wrapper/gradle-wrapper.jar
 

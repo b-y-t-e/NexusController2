@@ -47,11 +47,22 @@ class TestApkBuilds:
         )
         assert br._pick_apk("modern", "release").name == "app-modern-release.apk"
 
-    def test_falls_back_to_unsigned_when_that_is_all_there_is(self, tmp_path, monkeypatch, capsys):
+    def test_an_unsigned_release_is_the_end_of_the_build(self, tmp_path, monkeypatch):
+        """No phone installs one, so shipping it means the release is broken.
+
+        Gradle produces this exact file when it cannot find the key, and it does
+        so without failing — the name is the only sign.
+        """
         self._outputs(tmp_path, monkeypatch, ["app-modern-release-unsigned.apk"])
-        chosen = br._pick_apk("modern", "release")
-        assert chosen.name == "app-modern-release-unsigned.apk"
-        assert "unsigned" in capsys.readouterr().out
+        with pytest.raises(br.StepFailed, match="NEXUS_KEYSTORE"):
+            br._pick_apk("modern", "release")
+
+    def test_a_debug_build_is_not_held_to_that(self, tmp_path, monkeypatch):
+        """--debug-apk exists to try the pipeline without the key."""
+        self._outputs(
+            tmp_path, monkeypatch, ["app-modern-debug.apk"], variant="debug"
+        )
+        assert br._pick_apk("modern", "debug").name == "app-modern-debug.apk"
 
     def test_no_apk_is_an_error_not_a_crash(self, tmp_path, monkeypatch):
         self._outputs(tmp_path, monkeypatch, [])
@@ -70,13 +81,53 @@ class TestApkBuilds:
                 / f"app-{flavour}-debug.apk"
             )
 
-        built = br.build_apks(release_build=False)
+        built = br.build_apks(debug_build=True)
 
         assert [name for _, name in built] == [
-            "NexusController.apk", "NexusController-legacy.apk"
+            "NexusController-debug.apk", "NexusController-legacy-debug.apk"
         ]
         assert "assembleModernDebug" in calls[0]
         assert "assembleLegacyDebug" in calls[0]
+
+    def test_a_debug_build_never_takes_a_release_name(self, tmp_path, monkeypatch):
+        """release/ really did fill up with debug APKs called NexusController.apk.
+
+        Under the release name a debug build is indistinguishable from the real
+        thing — same file name, same line in SHA256SUMS.txt — and the only way
+        anybody finds out is a phone refusing to update, months later.
+        """
+        monkeypatch.setattr(br, "ANDROID", tmp_path)
+        monkeypatch.setattr(br, "GRADLEW", tmp_path / "gradlew.bat")
+        monkeypatch.setattr(br, "run", lambda *a, **k: None)
+        for flavour in ("modern", "legacy"):
+            write(
+                tmp_path / "app" / "build" / "outputs" / "apk" / flavour / "debug"
+                / f"app-{flavour}-debug.apk"
+            )
+
+        names = [name for _, name in br.build_apks(debug_build=True)]
+
+        assert all("debug" in name for name in names)
+        assert "NexusController.apk" not in names
+
+    def test_release_is_the_default(self, tmp_path, monkeypatch):
+        """A debug APK is signed with a throwaway key that differs per machine and
+        per CI run, so the phone treats every build as a different app and refuses
+        to update in place. Shipping one has to take a flag."""
+        calls: list[list[str]] = []
+        monkeypatch.setattr(br, "ANDROID", tmp_path)
+        monkeypatch.setattr(br, "GRADLEW", tmp_path / "gradlew.bat")
+        monkeypatch.setattr(br, "run", lambda cmd, **k: calls.append(cmd))
+        for flavour in ("modern", "legacy"):
+            write(
+                tmp_path / "app" / "build" / "outputs" / "apk" / flavour / "release"
+                / f"app-{flavour}-release.apk"
+            )
+
+        br.build_apks()
+
+        assert "assembleModernRelease" in calls[0]
+        assert "assembleLegacyRelease" in calls[0]
 
     def test_the_apk_is_built_clean(self, tmp_path, monkeypatch):
         """An incremental build once shipped a dex missing a class, with Gradle
@@ -91,7 +142,7 @@ class TestApkBuilds:
                 / f"app-{flavour}-debug.apk"
             )
 
-        br.build_apks(release_build=False)
+        br.build_apks(debug_build=True)
 
         assert "clean" in calls[0]
         assert "--no-build-cache" in calls[0]
@@ -229,3 +280,33 @@ class TestModuleCheck:
         with pytest.raises(br.StepFailed) as excinfo:
             br.check_modules("python", {"json": "stdlib"})
         assert "Fatal Python error" in str(excinfo.value)
+
+
+class TestTheWorkflowAgrees:
+    """The tag build and the local build must produce the same thing.
+
+    ``.github/workflows/release.yml`` is a second implementation of this script,
+    and the two have already drifted once — the workflow's staging step copied
+    paths that upload-artifact had not produced, so every tagged build failed
+    while the local one was fine. These are the cheap checks that would have
+    caught it, and the expensive one — actually running the workflow — cannot be
+    part of a 2-second suite.
+    """
+
+    WORKFLOW = (br.ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    def test_both_build_the_release_variant(self):
+        assert "assembleModernRelease assembleLegacyRelease" in self.WORKFLOW
+
+    def test_the_workflow_stages_the_paths_that_variant_produces(self):
+        for flavour, _ in br.APK_FLAVOURS:
+            assert f"apk/{flavour}/release/app-{flavour}-release.apk" in self.WORKFLOW
+
+    def test_the_workflow_ships_the_names_this_script_ships(self):
+        for _, name in br.APK_FLAVOURS:
+            assert f"staging/{name}" in self.WORKFLOW
+
+    def test_the_signing_key_is_required_rather_than_assumed(self):
+        """Without the secret, Gradle emits an unsigned APK and says nothing."""
+        assert "NEXUS_KEYSTORE_BASE64" in self.WORKFLOW
+        assert "signed by the wrong key" in self.WORKFLOW

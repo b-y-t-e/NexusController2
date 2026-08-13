@@ -13,6 +13,8 @@ Version 2 is a rewrite of an earlier project; the old code is *not* in this repo
 cd android && gradlew.bat --no-daemon testModernDebugUnitTest assembleModernDebug
 cd android && gradlew.bat --no-daemon lintModernDebug lintLegacyDebug  REM API levels
 .venv\Scripts\python build_release.py        REM tests + .exe + 2x .apk -> release\
+.venv\Scripts\python publish_release.py patch  REM bump + build + commit + tag + push
+.venv\Scripts\python publish_release.py minor --dry-run
 ```
 
 Python 3.14 venv at `.venv`. ViGEmBus **is** installed on this machine, so
@@ -102,14 +104,26 @@ and the pywebview UI thread polling `get_state()`.
   needed, log it.
 * Settings belong in `%APPDATA%\NexusController`, never next to the executable.
 * Binaries do not go in git — they are built and attached to GitHub Releases.
+* **Releases ship signed `assembleRelease` APKs, never debug ones.** A debug APK
+  is signed with `~/.android/debug.keystore`, which the CI runner *generates fresh
+  on every run* — so each release carried a different signature and Android
+  refused to update in place (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`); the only way
+  forward was uninstall, losing every layout. The release key lives in
+  `%APPDATA%\NexusController\signing\nexus-release.jks`, is pointed at by the
+  gitignored `android/keystore.properties`, and reaches CI as four repository
+  secrets (`NEXUS_KEYSTORE_BASE64` and friends). **Back that file up**: losing it
+  strands every installed copy on the version it has. Its certificate is
+  `13288e7a…c72feb`, pinned as `build_release.py:RELEASE_CERT_SHA256` — checked
+  against every APK by the local build *and* by the workflow, which reads that
+  same constant rather than keeping a second copy of it.
 * Commit messages in Polish, code and comments in English (the UI is English too).
 
 ## Roadmap
 
 **Done** — protocol v2 with token pairing; Xbox/DS4/Buzz emulation; 8 players
 (`protocol.MAX_PLAYERS`; only 4 of them can be XInput-backed — see `xinput.py`);
-rumble; offline dashboard; key bindings; XInput capacity detection; 556 server
-tests + 129 Kotlin tests + hardware smoke test.
+rumble; offline dashboard; key bindings; XInput capacity detection; 611 server
+tests + 144 Kotlin tests + hardware smoke test.
 
 **Done, continued** — central configuration (`PROTOCOL.md` §10): live pad preview
 on every player card, drag-and-drop designer, controller-type switch from the PC,
@@ -123,7 +137,17 @@ the same steps locally and collects both artefacts into `release/` (gitignored).
 2. Latency readout in the dashboard, from the existing PING/PONG sequence numbers.
 3. Snap-to-grid and alignment guides in the designer.
 4. Motion/gyro steering as a first-class mode rather than a racing-wheel special case.
-5. Signed builds, to stop SmartScreen warning on every download.
+5. In-app update: both sides ask the GitHub releases API for the latest tag and
+   offer to fetch it. On Windows a running `.exe` cannot be overwritten but *can*
+   be renamed, so the swap is rename-old, move-new, restart; settings live in
+   `%APPDATA%` and survive it. On Android it needs `REQUEST_INSTALL_PACKAGES`,
+   a `FileProvider` and the flavour-matching asset — and it only became possible
+   at all once releases were signed with a stable key. Note `/releases/latest`
+   404s when a repository has no release yet: that is "nothing to update to", not
+   an error.
+6. Authenticode signing for the `.exe`, to stop SmartScreen warning on every
+   download. Unlike the APK key this one has to be bought, and it is the only
+   remaining piece of "signed builds".
 
 **Explicitly not planned**
 * Native Buzz HID device emulation — RPCS3 drives buzzers from ordinary pads, so

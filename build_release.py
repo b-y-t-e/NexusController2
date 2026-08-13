@@ -14,17 +14,24 @@ Two APKs are produced: ``NexusController.apk`` for Android 9 and newer, and
     --exe-only       Windows executable only, skip Android
     --apk-only       Android APK only, skip the executable
     --no-driver      do not bundle the ViGEmBus installer into the executable
-    --release-apk    release instead of debug builds (see below)
+    --debug-apk      debug instead of release builds (see below)
 
-The APK is a *debug* build by default, because ``android/app/build.gradle.kts``
-defines no signing config: ``assembleRelease`` would emit an unsigned APK that no
-phone will install. ``--release-apk`` is there for once signing exists.
+The APK is a signed *release* build. Signing needs the key — from
+``android/keystore.properties`` or from ``NEXUS_KEYSTORE`` and friends in the
+environment — and without it Gradle emits ``app-*-release-unsigned.apk``, which
+no phone will install; that is an error here, not a warning.
+
+``--debug-apk`` builds the debug variant instead, for trying the pipeline without
+the key. Do not ship one: debug APKs are signed with the throwaway
+``~/.android/debug.keystore``, so the phone treats each build as a different app
+and refuses to update in place.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import shutil
 import subprocess
 import sys
@@ -180,6 +187,107 @@ def build_exe(python: str, no_driver: bool) -> Path:
     return produced
 
 
+#: The certificate every released APK must carry, as apksigner prints it.
+#:
+#: The public half of the release key. Not a secret — a certificate is what the
+#: phone already has — and pinning it is what turns "signed by something" into
+#: "signed by the key every installed copy expects". The workflow reads this same
+#: constant rather than keeping its own copy, because two pins that can disagree
+#: are worse than one.
+RELEASE_CERT_SHA256 = "13288e7aad983ddcb4e06a48862e1bbf3efcc7c3c76a613f2cec7c5d68c72feb"
+
+
+def _sdk_roots() -> list[Path]:
+    """Where an Android SDK is likely to be, most explicit first."""
+    roots = []
+    for variable in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        value = os.environ.get(variable)
+        if value:
+            roots.append(Path(value))
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        roots.append(Path(local) / "Android" / "Sdk")
+    roots.append(Path.home() / "AppData" / "Local" / "Android" / "Sdk")
+    roots.append(Path.home() / "Android" / "Sdk")
+    return roots
+
+
+def _version_key(directory: Path) -> tuple:
+    """Sort build-tools by version, not alphabetically.
+
+    Plain text order puts "9.0.0" above "35.0.0", which is how a check ends up
+    running the oldest tool on the machine — or, in a container that only has the
+    new one, not running at all.
+    """
+    return tuple(int(part) if part.isdigit() else -1 for part in directory.name.split("."))
+
+
+def apksigner() -> Path:
+    """The newest ``apksigner`` in the SDK, or a message saying where to get one."""
+    names = ("apksigner.bat", "apksigner") if sys.platform == "win32" else ("apksigner",)
+    for root in _sdk_roots():
+        build_tools = root / "build-tools"
+        if not build_tools.is_dir():
+            continue
+        for directory in sorted(build_tools.iterdir(), key=_version_key, reverse=True):
+            for name in names:
+                candidate = directory / name
+                if candidate.is_file():
+                    return candidate
+    raise StepFailed(
+        "cannot find apksigner in any Android SDK (looked under ANDROID_HOME, "
+        "ANDROID_SDK_ROOT and %LOCALAPPDATA%\\Android\\Sdk) — it is what proves "
+        "an APK carries the release key, so a release cannot be built without it"
+    )
+
+
+def certificate_of(apk: Path, tool: Path | None = None) -> str:
+    """The SHA-256 digest of the certificate that signed *apk*."""
+    tool = tool or apksigner()
+    try:
+        result = subprocess.run(
+            [str(tool), "verify", "--print-certs", str(apk)],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError as exc:
+        raise StepFailed(f"cannot run {tool}: {exc}") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise StepFailed(
+            f"{apk.name} did not verify (exit {result.returncode}): "
+            f"{detail[-1] if detail else 'no output'}"
+        )
+    marker = "certificate SHA-256 digest: "
+    for line in result.stdout.splitlines():
+        if marker in line:
+            return line.split(marker, 1)[1].strip().lower()
+    raise StepFailed(f"apksigner said nothing about {apk.name}'s certificate")
+
+
+def verify_signatures(artefacts: list[tuple[Path, str]]) -> None:
+    """Refuse to ship an APK signed by anything but the release key.
+
+    Until this existed the only pin was in the workflow, which runs *after* a tag
+    is pushed — so the local ``release/`` directory, the one a person is most
+    likely to hand round, was certified by its own SHA256SUMS.txt and by nothing
+    else. It really did fill up with debug-signed APKs under release names.
+    """
+    apks = [(source, name) for source, name in artefacts if source.suffix == ".apk"]
+    if not apks:
+        return
+    tool = apksigner()
+    for source, name in apks:
+        digest = certificate_of(source, tool)
+        if digest != RELEASE_CERT_SHA256:
+            raise StepFailed(
+                f"{name} is signed by {digest}, not by the release key "
+                f"({RELEASE_CERT_SHA256}). An APK signed by a different key cannot "
+                "update an installed copy — Android refuses it — so this one must "
+                "not be shipped. Check which keystore the build used"
+            )
+    log(f"signature ok — {len(apks)} APK(s) carry the release certificate")
+
+
 #: The two APKs a release ships, newest-phone first.
 #: ``modern`` is the one to install; ``legacy`` reaches back to Android 5 for
 #: phones that cannot run it — which, for a room of four Buzz buzzers, is exactly
@@ -187,9 +295,9 @@ def build_exe(python: str, no_driver: bool) -> Path:
 APK_FLAVOURS = (("modern", "NexusController.apk"), ("legacy", "NexusController-legacy.apk"))
 
 
-def build_apks(release_build: bool) -> list[tuple[Path, str]]:
+def build_apks(debug_build: bool = False) -> list[tuple[Path, str]]:
     """Build every flavour in one Gradle run and return ``(file, release name)``."""
-    variant = "Release" if release_build else "Debug"
+    variant = "Debug" if debug_build else "Release"
     tasks = [f"assemble{flavour.capitalize()}{variant}" for flavour, _ in APK_FLAVOURS]
     # Clean, and with the build cache off. An incremental build once produced an
     # APK whose dex was missing a class that had not changed — Gradle reported
@@ -200,9 +308,19 @@ def build_apks(release_build: bool) -> list[tuple[Path, str]]:
         cwd=ANDROID,
         what=f"Android APKs ({', '.join(f for f, _ in APK_FLAVOURS)})",
     )
+    # A debug build is named apart, always. Under the release name it is
+    # indistinguishable from the real thing in `release/` — same file name, same
+    # SHA256SUMS.txt line — and the only way anyone finds out is a phone refusing
+    # to update, months later.
     return [
-        (_pick_apk(flavour, variant.lower()), name) for flavour, name in APK_FLAVOURS
+        (_pick_apk(flavour, variant.lower()), _debug_name(name) if debug_build else name)
+        for flavour, name in APK_FLAVOURS
     ]
+
+
+def _debug_name(name: str) -> str:
+    stem, _, suffix = name.rpartition(".")
+    return f"{stem}-debug.{suffix}"
 
 
 def _pick_apk(flavour: str, variant: str) -> Path:
@@ -211,15 +329,26 @@ def _pick_apk(flavour: str, variant: str) -> Path:
     if not candidates:
         raise StepFailed(f"no APK in {outputs}")
 
-    # Both app-release.apk and app-release-unsigned.apk can be sitting there from
-    # different builds, and "-" sorts before "." — so plain alphabetical order
-    # would hand back the unsigned one. Prefer a signed APK; only fall back to an
-    # unsigned one when that is all there is, and say so.
+    # "-" sorts before ".", so plain alphabetical order would hand back
+    # app-<flavour>-release-unsigned.apk over app-<flavour>-release.apk. Only one
+    # of the two can be here now that every build starts with `clean`, but which
+    # one is exactly the question being asked, and answering it by sort order was
+    # how an unsigned APK got picked in the first place.
     signed = [c for c in candidates if "unsigned" not in c.name]
-    chosen = signed[0] if signed else candidates[0]
-    if "unsigned" in chosen.name:
-        log(f"warning: the {flavour} APK is unsigned — no phone will install it")
-    return chosen
+    if signed:
+        return signed[0]
+
+    # Nothing signed. For a release that is the end of it: an unsigned APK cannot
+    # be installed, and shipping one means the release is discovered to be broken
+    # by whoever downloads it. The cause is always the same — Gradle could not
+    # find the key — so name the two places it looks.
+    if variant == "release":
+        raise StepFailed(
+            f"the {flavour} release APK is unsigned — Gradle found no signing key. "
+            "Point android/keystore.properties at it, or set NEXUS_KEYSTORE, "
+            "NEXUS_KEYSTORE_PASSWORD, NEXUS_KEY_ALIAS and NEXUS_KEY_PASSWORD"
+        )
+    return candidates[0]
 
 
 # --- collection -------------------------------------------------------------
@@ -283,6 +412,7 @@ def collect(artefacts: list[tuple[Path, str]]) -> None:
     if stale:
         log(f"NOTE: kept from an earlier build, not rebuilt now: {', '.join(stale)}")
         log("      run without --exe-only/--apk-only for a release built in one go")
+        _warn_about_foreign_apks(f for f in present if f.name in stale)
 
     if failures:
         # No checksum file at all. It says "these are the release", and this
@@ -303,6 +433,28 @@ def collect(artefacts: list[tuple[Path, str]]) -> None:
         )
 
 
+def _warn_about_foreign_apks(files) -> None:
+    """Say so when an APK kept from an earlier run is not the release key's.
+
+    The one that is about to be listed in SHA256SUMS.txt beside freshly signed
+    files, under a release name, with nothing to distinguish it. Only a warning:
+    these are not this run's artefacts and deleting somebody's files is not this
+    script's business — but certifying them silently is exactly how the directory
+    ended up full of debug builds.
+    """
+    for path in files:
+        if path.suffix != ".apk":
+            continue
+        try:
+            digest = certificate_of(path)
+        except StepFailed as exc:
+            log(f"      cannot check {path.name}: {exc}")
+            continue
+        if digest != RELEASE_CERT_SHA256:
+            log(f"      WARNING: {path.name} is signed by {digest[:16]}…, not the release key")
+            log("      it cannot update an installed copy — rebuild or delete it")
+
+
 def check_tooling(want_apk: bool) -> None:
     if want_apk and not GRADLEW.is_file():
         raise StepFailed(f"{GRADLEW} is missing")
@@ -315,8 +467,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-tests", action="store_true",
                         help="do not run the test suites or Android lint")
     parser.add_argument("--no-driver", action="store_true", help="do not bundle ViGEmBus")
-    parser.add_argument("--release-apk", action="store_true",
-                        help="assembleRelease instead of assembleDebug (currently unsigned)")
+    parser.add_argument("--debug-apk", action="store_true",
+                        help="assembleDebug instead of assembleRelease — never ship one")
     target = parser.add_mutually_exclusive_group()
     target.add_argument("--exe-only", action="store_true", help="skip the Android build")
     target.add_argument("--apk-only", action="store_true", help="skip the Windows build")
@@ -346,7 +498,13 @@ def main(argv: list[str] | None = None) -> int:
         if want_exe:
             artefacts.append((build_exe(python, args.no_driver), EXE_NAME))
         if want_apk:
-            artefacts.extend(build_apks(args.release_apk))
+            built_apks = build_apks(args.debug_apk)
+            # Before anything is copied under a release name, and only for a real
+            # release: a debug build cannot carry this certificate and is not
+            # pretending to.
+            if not args.debug_apk:
+                verify_signatures(built_apks)
+            artefacts.extend(built_apks)
 
         collect(artefacts)
     except StepFailed as exc:

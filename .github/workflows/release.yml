@@ -62,9 +62,28 @@ jobs:
         working-directory: android
         run: ./gradlew --no-daemon lintModernDebug lintLegacyDebug
 
+      # The key, from repository secrets. Without it Gradle silently produces
+      # app-*-release-unsigned.apk and the staging step below fails to find the
+      # file it expects — which is the intended outcome: an unsigned APK is one
+      # no phone installs, and a release must not contain one.
+      - name: Restore the signing key
+        env:
+          NEXUS_KEYSTORE_BASE64: ${{ secrets.NEXUS_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$NEXUS_KEYSTORE_BASE64" ]; then
+            echo "::error::NEXUS_KEYSTORE_BASE64 is not set — the APKs would be unsigned"
+            exit 1
+          fi
+          printf '%s' "$NEXUS_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/nexus-release.jks"
+
       - name: Build the APKs
         working-directory: android
-        run: ./gradlew --no-daemon assembleModernDebug assembleLegacyDebug
+        env:
+          NEXUS_KEYSTORE: ${{ runner.temp }}/nexus-release.jks
+          NEXUS_KEYSTORE_PASSWORD: ${{ secrets.NEXUS_KEYSTORE_PASSWORD }}
+          NEXUS_KEY_ALIAS: ${{ secrets.NEXUS_KEY_ALIAS }}
+          NEXUS_KEY_PASSWORD: ${{ secrets.NEXUS_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon assembleModernRelease assembleLegacyRelease
 
       # Staged flat, and named here rather than in the publish job. With two
       # explicit paths, upload-artifact roots the artifact at their least common
@@ -73,10 +92,32 @@ jobs:
       - name: Stage the APKs
         run: |
           mkdir -p staging
-          cp android/app/build/outputs/apk/modern/debug/app-modern-debug.apk \
+          cp android/app/build/outputs/apk/modern/release/app-modern-release.apk \
              staging/NexusController.apk
-          cp android/app/build/outputs/apk/legacy/debug/app-legacy-debug.apk \
+          cp android/app/build/outputs/apk/legacy/release/app-legacy-release.apk \
              staging/NexusController-legacy.apk
+
+      # Belt and braces. The copy above already fails on an unsigned build, but a
+      # release signed by the *wrong* key looks exactly like a correct one until
+      # somebody's phone refuses the update — by which point the tag is public.
+      - name: Verify the signatures
+        run: |
+          # The pin lives in build_release.py, which checks it locally too. Two
+          # copies of a fingerprint are one copy more than can be kept in step,
+          # and the one that drifts is the one nobody reads.
+          EXPECTED=$(python3 -c "import build_release; print(build_release.RELEASE_CERT_SHA256)")
+          # sort -V, not sort: in plain text order "9.0.0" beats "35.0.0", so the
+          # oldest build-tools on the machine would be the one doing the checking.
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          for apk in staging/*.apk; do
+            digest=$("$apksigner" verify --print-certs "$apk" \
+                     | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+            echo "$apk: $digest"
+            if [ "$digest" != "$EXPECTED" ]; then
+              echo "::error::$apk is signed by the wrong key"
+              exit 1
+            fi
+          done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -124,5 +165,12 @@ jobs:
             **Phone:** install `NexusController.apk` (Android 9+), then scan the QR
             code shown by the dashboard. On an older phone use
             `NexusController-legacy.apk`, which installs back to Android 5.
+
+            > **Updating from 2.0.0 or earlier: uninstall the app first.**
+            > Those builds were signed with a throwaway key that changed on every
+            > build, so Android refuses to install this one over them
+            > (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`). Uninstalling loses the
+            > layouts saved on the phone. This is the last time: from this release
+            > on the key is stable, and updates install straight over the top.
 
             Verify your download against `SHA256SUMS.txt`.
