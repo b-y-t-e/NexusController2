@@ -670,6 +670,16 @@ class Api:
                 log.info("update check failed: %s", exc)
                 self._set_update(state="error", error=str(exc))
                 return
+            except Exception as exc:  # noqa: BLE001 - see below
+                # Anything else is a bug in here, not a network problem — but the
+                # state machine must not care which it was. "checking" is a state
+                # nothing else can leave, and check_for_update() refuses to start
+                # while it is set, so an escaping exception would jam every later
+                # check for the life of the process. On a daemon thread nobody
+                # would even see the traceback.
+                log.exception("update check raised")
+                self._set_update(state="error", error=f"the update check failed: {exc}")
+                return
             if release is None:
                 self._set_update(state="none", latest=None, error=None)
                 return
@@ -678,7 +688,6 @@ class Api:
                 state="available" if available else "none",
                 latest=release.version,
                 tag=release.tag,
-                notes=release.notes[:2000],
                 error=None,
                 has_asset=release.url(updates.ASSET_NAME) is not None,
             )
@@ -715,6 +724,16 @@ class Api:
             self._append_log(f"Update failed: {exc}")
             self._set_update(state="error", error=str(exc))
             return {"ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001 - the state must be left usable
+            # Same reasoning as the check, and worse: "installing" disables the
+            # button *and* blocks every check, so a bug here would take the whole
+            # feature out until the app is restarted. The dashboard is told in
+            # the same shape as any other failure.
+            log.exception("update install raised")
+            message = f"the update failed unexpectedly: {exc}"
+            self._append_log(f"Update failed: {message}")
+            self._set_update(state="error", error=message)
+            return {"ok": False, "error": message}
 
         self._set_update(state="installed")
         self._append_log(f"Updated to {release.version} — restarting")
@@ -820,6 +839,11 @@ def run_headless(simulate: bool = False) -> int:
     backend, simulated, driver_error = _make_backend(simulate)
     if driver_error:
         log.warning("ViGEmBus unavailable, simulating: %s", driver_error)
+
+    # The same housekeeping the windowed app does. A machine that only ever runs
+    # headless — an autostart entry, a spare PC in the corner — kept every build
+    # an update had ever replaced, because the only call to this was over there.
+    updates.clear_backup()
 
     store = SettingsStore()
     settings = store.load()

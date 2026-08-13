@@ -399,6 +399,52 @@ class TestUpdates:
         finally:
             instance.shutdown()
 
+    def test_an_unexpected_failure_does_not_jam_checking_for_ever(self, api, monkeypatch):
+        """"checking" is a state only the worker can leave.
+
+        It catches UpdateError, so a bug anywhere else — in the parsing, in the
+        comparison, in a library — escaped a daemon thread where nobody sees a
+        traceback, and left the state set. check_for_update() then refuses to
+        start while it is set, so every later check, for the life of the process,
+        did nothing at all. The button just stopped working.
+        """
+        def explode(**kwargs):
+            raise ValueError("something nobody thought of")
+
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", explode)
+        api.check_for_update()
+        status = _settled(api)
+        assert status["state"] == "error"
+        assert "something nobody thought of" in status["error"]
+
+        # And the next check must actually run.
+        release = updates.Release(
+            tag="v99.0.0",
+            assets={"NexusController.exe": updates.DOWNLOAD_PREFIX + "v99.0.0/NexusController.exe"},
+        )
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: release)
+        api.check_for_update()
+        assert _settled(api)["state"] == "available"
+
+    def test_an_unexpected_failure_while_installing_leaves_the_state_usable(
+        self, api, monkeypatch, tmp_path
+    ):
+        """Worse than the check: "installing" disables the button as well."""
+        exe = tmp_path / "NexusController.exe"
+        exe.write_bytes(b"old")
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.updates.writable", lambda p, **k: True)
+
+        def explode(**kwargs):
+            raise ValueError("the wheels came off")
+
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", explode)
+        result = api.install_update()
+
+        assert result["ok"] is False
+        assert "the wheels came off" in result["error"]
+        assert api.update_status()["state"] == "error"
+
     def test_status_starts_idle_and_names_this_build(self, api):
         from nexus_server import __version__
 

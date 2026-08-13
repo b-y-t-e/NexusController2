@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -154,9 +155,37 @@ def verify(payload: bytes, name: str, checksums: str) -> None:
 
 # --- I/O: fetching ----------------------------------------------------------
 
+class _HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler):
+    """Follows redirects, but never off https.
+
+    GitHub answers an asset URL with a redirect to its object store, so
+    redirects have to be followed — and the default handler follows them
+    anywhere, http included. These bytes become the running executable; a
+    downgrade to plain http would put a man in the middle of that, and the
+    checksum is no defence because it travels the same way. The Android client
+    has refused non-https redirects from the start; this is the same rule on the
+    side that has more to lose.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlsplit(newurl).scheme != "https":
+            raise UpdateError(f"refusing a redirect to {newurl}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+#: The default opener for everything in here: https in, https out.
+HTTPS_OPENER: Opener = urllib.request.build_opener(_HttpsOnlyRedirects()).open
+
+
 def _read(url: str, *, opener: Opener, timeout: float, limit: int) -> bytes:
+    # The scheme really is checked, which is what the suppression below has
+    # always claimed. Every URL comes from a constant or from a release document
+    # whose asset URLs were matched against DOWNLOAD_PREFIX, so this is the last
+    # line of a defence rather than the first.
+    if urllib.parse.urlsplit(url).scheme != "https":
+        raise UpdateError(f"refusing to fetch {url} — only https is allowed")
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with opener(request, timeout=timeout) as response:  # noqa: S310 - URL checked below
+    with opener(request, timeout=timeout) as response:  # noqa: S310 - scheme checked above
         # read(limit + 1), so a body exactly at the limit is still detectable as
         # oversized rather than silently truncated into something that then fails
         # its checksum for no visible reason.
@@ -167,7 +196,7 @@ def _read(url: str, *, opener: Opener, timeout: float, limit: int) -> bytes:
 
 
 def fetch_latest(
-    *, opener: Opener = urllib.request.urlopen, timeout: float = 10.0
+    *, opener: Opener = HTTPS_OPENER, timeout: float = 10.0
 ) -> Release | None:
     """The latest published release, or ``None`` when there is none to have.
 
@@ -197,7 +226,7 @@ def download(
     release: Release,
     name: str = ASSET_NAME,
     *,
-    opener: Opener = urllib.request.urlopen,
+    opener: Opener = HTTPS_OPENER,
     timeout: float = 120.0,
 ) -> bytes:
     """Fetch one asset and return it only once it matches the release's checksum."""
@@ -233,24 +262,43 @@ def running_executable() -> Path | None:
 
 
 def backup_for(exe: Path) -> Path:
-    """Where the outgoing build is parked until the next start can delete it."""
+    """Where the outgoing build is parked until a later start deletes it.
+
+    "The next start" would be a promise only the windowed app keeps: clearing it
+    is a call, and ``--headless`` did not make it, so a machine that only ever
+    runs headless kept every previous build for ever.
+    """
     return exe.with_name(exe.stem + ".old" + exe.suffix)
 
 
-def writable(exe: Path) -> bool:
+#: Answers already given by :func:`writable`, keyed by the path asked about.
+_writable_cache: dict[Path, bool] = {}
+
+
+def writable(exe: Path, *, recheck: bool = False) -> bool:
     """Whether the swap can even be attempted, asked by doing rather than guessing.
 
     ``os.access`` reports the DACL and lies about the two cases that matter on
     Windows — a directory under ``Program Files`` protected by UAC virtualisation,
     and one where the ACL allows what the token does not. Creating a file is the
     only honest answer.
+
+    Which is why the answer is kept. The dashboard asks for the update status
+    every three seconds and this sits behind it, so the honest answer was being
+    bought twenty times a minute with a real file created and deleted beside the
+    running ``.exe`` — for something that cannot change while the program runs,
+    in the one directory where a virus scanner is watching hardest.
     """
+    if not recheck and exe in _writable_cache:
+        return _writable_cache[exe]
     probe = exe.with_name(exe.name + ".writetest")
     try:
         probe.touch()
         probe.unlink()
     except OSError:
+        _writable_cache[exe] = False
         return False
+    _writable_cache[exe] = True
     return True
 
 

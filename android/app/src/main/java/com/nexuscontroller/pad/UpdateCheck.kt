@@ -137,8 +137,17 @@ object UpdateCheck {
      * page. This APK is about to be handed to the package installer, so "probably
      * fine" is not a standard it can be held to.
      */
-    fun matchesChecksum(payload: ByteArray, name: String, checksums: String?): Boolean {
+    fun matchesChecksum(payload: ByteArray, name: String, checksums: String?): Boolean =
+        matchesChecksum(sha256(payload), name, checksums)
+
+    /**
+     * The same question for a file too big to hold in memory.
+     *
+     * The APK is streamed to disk and hashed as it goes, so what arrives here is
+     * the digest rather than the bytes — see [Updater.downloadAndInstall].
+     */
+    fun matchesChecksum(digest: String, name: String, checksums: String?): Boolean {
         val expected = parseChecksums(checksums)[name] ?: return false
-        return sha256(payload) == expected
+        return digest.equals(expected, ignoreCase = true)
     }
 }

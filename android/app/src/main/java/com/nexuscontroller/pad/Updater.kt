@@ -11,9 +11,8 @@ import android.provider.Settings
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
+import java.io.File
+import java.security.MessageDigest
 
 /**
  * The half of updating that opens sockets and talks to the package installer.
@@ -53,7 +52,17 @@ fun UpdateStatus.isActionable(): Boolean = when (this) {
     else -> true
 }
 
-class Updater(private val context: Context) {
+class Updater(
+    private val context: Context,
+    /**
+     * How the bytes are fetched. Replaced in tests, which is the only way any of
+     * this is testable at all: the rules that matter — refusing a redirect off
+     * https, refusing a body larger than the cap, reporting progress — sat
+     * behind `URL.openConnection()` and could not be reached without a network
+     * and a real GitHub release.
+     */
+    private val downloader: Downloader = Downloader(),
+) {
 
     /**
      * Whether this build can install anything at all.
@@ -102,7 +111,7 @@ class Updater(private val context: Context) {
     suspend fun check(currentVersion: String, flavor: String): UpdateStatus =
         withContext(Dispatchers.IO) {
             val body = try {
-                fetch(UpdateCheck.RELEASE_API, MAX_JSON_BYTES)
+                downloader.read(UpdateCheck.RELEASE_API, MAX_JSON_BYTES)
             } catch (e: Exception) {
                 Log.i(TAG, "update check failed: $e")
                 return@withContext UpdateStatus.Failed(e.messageForUser())
@@ -137,39 +146,89 @@ class Updater(private val context: Context) {
         val sumsUrl = release.url(UpdateCheck.CHECKSUMS_ASSET)
             ?: return@withContext UpdateStatus.Failed("This release ships no checksums to verify against")
 
-        val payload = try {
-            val sums = String(fetch(sumsUrl, MAX_JSON_BYTES), Charsets.UTF_8)
-            val apk = fetch(url, MAX_APK_BYTES, onProgress)
-            if (!UpdateCheck.matchesChecksum(apk, name, sums)) {
-                return@withContext UpdateStatus.Failed(
-                    "The download does not match its checksum — try again"
-                )
-            }
-            apk
-        } catch (e: Exception) {
-            Log.w(TAG, "download failed", e)
-            return@withContext UpdateStatus.Failed(e.messageForUser())
-        }
-
+        // Straight to a file rather than into memory. The APK is around 55 MB;
+        // held as a ByteArray it was that much on the heap, doubled by the copy
+        // toByteArray() makes, and the cap allowed 200 MB — on the old phones the
+        // legacy flavour exists for, that is an OutOfMemoryError rather than an
+        // update. The file goes in the cache directory, where the system can
+        // reclaim it if we somehow fail to.
+        val staged = File.createTempFile("nexus-update", ".apk", context.cacheDir)
         try {
-            commit(payload)
-        } catch (e: Exception) {
-            Log.w(TAG, "could not hand the APK to the installer", e)
-            return@withContext UpdateStatus.Failed(e.messageForUser())
+            val payload = try {
+                val sums = String(downloader.read(sumsUrl, MAX_JSON_BYTES), Charsets.UTF_8)
+                downloader.readTo(url, staged, MAX_APK_BYTES, onProgress)
+                if (!UpdateCheck.matchesChecksum(sha256(staged), name, sums)) {
+                    return@withContext UpdateStatus.Failed(
+                        "The download does not match its checksum — try again"
+                    )
+                }
+                staged
+            } catch (e: Exception) {
+                Log.w(TAG, "download failed", e)
+                return@withContext UpdateStatus.Failed(e.messageForUser())
+            }
+
+            try {
+                commit(payload)
+            } catch (e: Exception) {
+                Log.w(TAG, "could not hand the APK to the installer", e)
+                return@withContext UpdateStatus.Failed(e.messageForUser())
+            }
+        } finally {
+            // The installer has its own copy by now, committed or abandoned.
+            if (!staged.delete()) Log.i(TAG, "could not delete $staged")
         }
         UpdateStatus.Installing
     }
 
-    /** Write the APK into an install session and commit it. */
-    private fun commit(payload: ByteArray) {
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(COPY_BUFFER)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /** Write the APK into an install session and commit it.
+     *
+     * Anything that goes wrong between creating the session and committing it
+     * has to abandon it. A session that is neither committed nor abandoned stays
+     * staged, holding its copy of the APK, and Android allows an app only so
+     * many at once — so a failure that repeats (a full disk, a truncated file)
+     * ends with createSession refusing outright, and the update feature stops
+     * working for reasons that have nothing to do with updating.
+     */
+    private fun commit(payload: File) {
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(
             PackageInstaller.SessionParams.MODE_FULL_INSTALL
         )
+        params.setAppPackageName(context.packageName)
         val sessionId = installer.createSession(params)
+        try {
+            writeAndCommit(installer, sessionId, payload)
+        } catch (e: Exception) {
+            runCatching { installer.abandonSession(sessionId) }
+                .onFailure { Log.w(TAG, "could not abandon session $sessionId", it) }
+            throw e
+        }
+    }
+
+    private fun writeAndCommit(
+        installer: PackageInstaller,
+        sessionId: Int,
+        payload: File
+    ) {
         installer.openSession(sessionId).use { session ->
-            session.openWrite(SESSION_NAME, 0, payload.size.toLong()).use { out ->
-                out.write(payload)
+            session.openWrite(SESSION_NAME, 0, payload.length()).use { out ->
+                // Copied in blocks: the APK is tens of megabytes and the phones
+                // this reaches back to have hundreds of them in total.
+                payload.inputStream().use { input -> input.copyTo(out, COPY_BUFFER) }
                 session.fsync(out)
             }
             val intent = Intent(context, InstallResultReceiver::class.java)
@@ -187,75 +246,17 @@ class Updater(private val context: Context) {
         }
     }
 
-    /** Read a URL into memory, capped, reporting progress when the size is known. */
-    private fun fetch(
-        url: String,
-        limit: Int,
-        onProgress: ((Int) -> Unit)? = null
-    ): ByteArray {
-        // Ours or nothing. The API URL is a constant and every asset URL was
-        // checked against DOWNLOAD_PREFIX when the release was parsed, so this is
-        // belt and braces — but it is the last point before bytes become an app.
-        require(url.startsWith(UpdateCheck.DOWNLOAD_PREFIX) || url == UpdateCheck.RELEASE_API) {
-            "refusing to download from $url"
-        }
-        var connection = URL(url).openConnection() as HttpURLConnection
-        var redirects = 0
-        try {
-            while (true) {
-                connection.connectTimeout = CONNECT_TIMEOUT_MS
-                connection.readTimeout = READ_TIMEOUT_MS
-                connection.setRequestProperty("User-Agent", USER_AGENT)
-                connection.instanceFollowRedirects = false
-                val code = connection.responseCode
-                // GitHub serves release assets as a redirect to its object store,
-                // and HttpURLConnection will not follow one across protocols or
-                // hosts by itself. Followed by hand, and only to https.
-                if (code in 300..399 && redirects < MAX_REDIRECTS) {
-                    val next = connection.getHeaderField("Location") ?: break
-                    require(next.startsWith("https://")) { "refusing a redirect to $next" }
-                    connection.disconnect()
-                    connection = URL(next).openConnection() as HttpURLConnection
-                    redirects++
-                    continue
-                }
-                if (code != HttpURLConnection.HTTP_OK) {
-                    throw IllegalStateException("GitHub answered $code")
-                }
-                break
-            }
-
-            val total = connection.contentLength
-            val buffer = ByteArray(64 * 1024)
-            val sink = ByteArrayOutputStream(if (total > 0) total else 1 shl 20)
-            connection.inputStream.use { input ->
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read < 0) break
-                    sink.write(buffer, 0, read)
-                    if (sink.size() > limit) throw IllegalStateException("the download is far larger than expected")
-                    if (total > 0 && onProgress != null) {
-                        onProgress((sink.size() * 100L / total).toInt().coerceIn(0, 100))
-                    }
-                }
-            }
-            return sink.toByteArray()
-        } finally {
-            connection.disconnect()
-        }
-    }
-
     private fun Exception.messageForUser(): String =
         message?.takeIf { it.isNotBlank() } ?: javaClass.simpleName
 
     companion object {
         private const val TAG = "NexusUpdater"
-        private const val USER_AGENT = "NexusController-android"
         private const val SESSION_NAME = "nexus"
-        private const val CONNECT_TIMEOUT_MS = 10_000
-        private const val READ_TIMEOUT_MS = 30_000
-        private const val MAX_REDIRECTS = 5
+        private const val COPY_BUFFER = 64 * 1024
         private const val MAX_JSON_BYTES = 1 shl 20
+        //: Room for the APK to grow, without room for a "release" that is really
+        //: a disk-filling exercise. Streamed to a file, so this is a ceiling on
+        //: the cache directory rather than on the heap.
         private const val MAX_APK_BYTES = 200 shl 20
     }
 }

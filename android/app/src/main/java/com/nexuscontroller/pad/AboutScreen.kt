@@ -46,9 +46,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.launch
 
-private const val RELEASES_URL =
-    "https://github.com/b-y-t-e/NexusController2/releases/latest"
-
 @Composable
 fun AboutScreen(
     onBack: () -> Unit,

@@ -547,12 +547,29 @@ function refreshFirewall() {
 // there is nothing here worth interrupting anybody for.
 const UPDATE_POLL_MS = 3000;
 
+/** Outcome of the last "Download and install" click, kept until it is acted on.
+ *
+ * The poll below runs every three seconds and decides what the banner says from
+ * the state alone — so the sentence explaining why an install failed was on
+ * screen for at most three seconds before the banner hid itself, which is not
+ * long enough to read a sentence, let alone act on one. The firewall banner
+ * already had this exact problem and this is the same answer. */
+let updateMessage = null;
+
 function refreshUpdate() {
   return api().update_status().then((status) => {
     syncCheckbox($('updates-toggle'), status.enabled);
     const banner = $('update-banner');
     const available = status.state === 'available' && status.latest;
-    banner.classList.toggle('hidden', !available && status.state !== 'installing');
+    banner.classList.toggle(
+      'hidden', !available && status.state !== 'installing' && !updateMessage
+    );
+
+    // Whatever the state says, a message the user has not dealt with yet wins.
+    if (updateMessage) {
+      $('update-text').textContent = updateMessage;
+      return status;
+    }
 
     if (status.state === 'installing') {
       $('update-text').textContent = 'Downloading the new version… ';
@@ -576,16 +593,26 @@ function refreshUpdate() {
 function installUpdate() {
   const button = $('update-install');
   button.disabled = true;
+  updateMessage = null;
   $('update-text').textContent = 'Downloading the new version… ';
   api().install_update().then((result) => {
     if (result.ok) {
-      $('update-text').textContent =
+      updateMessage =
         'Version ' + result.version + ' is installed and starting. This window will close. ';
+      $('update-text').textContent = updateMessage;
       // The new build is already running and wants the port this one holds.
       setTimeout(() => api().close_window(), 1200);
       return;
     }
-    $('update-text').textContent = 'Update failed: ' + result.error + ' ';
+    updateMessage = 'Update failed: ' + result.error + ' ';
+    $('update-text').textContent = updateMessage;
+    button.disabled = false;
+  }).catch((error) => {
+    // A rejected bridge call is still an answer, and the one case where saying
+    // nothing is worst: without this the button stays disabled and the banner
+    // reads "Downloading the new version…" until the app is restarted.
+    updateMessage = 'The update could not be started: ' + error + ' ';
+    $('update-text').textContent = updateMessage;
     button.disabled = false;
   });
 }
