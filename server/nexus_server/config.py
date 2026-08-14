@@ -78,6 +78,16 @@ class Settings:
     #: needs an attacker already on your LAN.
     pin_token: bool = True
     token: str = field(default_factory=generate_token)
+    #: Whether the server was serving when this app last had a say, so the next
+    #: start can pick up where the last one left off.
+    #:
+    #: It is the *user's* last decision, not a snapshot of a moment: pressing
+    #: Stop clears it, and nothing else does. Quitting, closing the window, an
+    #: update swapping the build, Windows shutting down with the app still
+    #: serving — none of those are anybody saying "stop", so the phone finds the
+    #: server there again after the PC comes back. That is the whole point:
+    #: with the login entry as well, nobody has to touch the PC at all.
+    server_running: bool = False
     #: Interface to bind, or ``""`` for the auto-detected LAN address.
     bind_ip: str = ""
     port: int = DEFAULT_TCP_PORT

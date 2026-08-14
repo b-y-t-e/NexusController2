@@ -25,7 +25,7 @@ from . import __version__, autostart, tray, updates
 from .config import Settings, SettingsStore, generate_token
 from .desktop import DesktopControl, create_backend
 from .devices import DriverUnavailableError, FakeBackend, PadBackend, VGamepadBackend
-from .netinfo import local_ips
+from .netinfo import ALL_INTERFACES, local_ips
 from .padconfig import PadConfig, describe_components
 from .protocol import DeviceType, ProtocolError, valid_ipv4
 from .server import ControllerServer
@@ -197,7 +197,13 @@ class Api:
     # -- server control -----------------------------------------------------
 
     def start_server(self, bind_ip: str | None = None) -> dict:
-        if bind_ip and bind_ip != "AUTO":
+        if bind_ip == "ALL":
+            # Every interface at once, for a PC that is on two networks — an
+            # Ethernet LAN and Wi-Fi, a laptop in a dock — where a single bound
+            # address is reachable from one of them and invisible from the other.
+            # The QR code keeps carrying a real address; see netinfo.advertised_ip.
+            self.settings.bind_ip = ALL_INTERFACES
+        elif bind_ip and bind_ip != "AUTO":
             # Checked here, where it can still be refused with a message, rather
             # than at the first poll where it would only produce a broken QR.
             if not valid_ipv4(bind_ip):
@@ -210,12 +216,40 @@ class Api:
         except OSError as exc:
             self._append_log(f"Start failed: {exc}")
             return {"ok": False, "error": str(exc)}
+        # Written only after the bind succeeded: a port that was taken is not a
+        # state worth restoring, and the next start would fail the same way.
+        self.settings.server_running = True
         self.store.save(self.settings)
         return {"ok": True}
 
     def stop_server(self) -> dict:
         self.server.stop()
+        # The one thing that means "stopped, and stay stopped". Quitting the app
+        # or shutting the PC down does not come through here, which is exactly
+        # what makes them different from pressing this button.
+        self.settings.server_running = False
+        self._persist()
         return {"ok": True}
+
+    def resume_server(self) -> dict:
+        """Start the server again if that is where the last session left it.
+
+        Called once, from the I/O shell, on the way up. Failing here is not an
+        error the user has to answer: the dashboard is about to open with a Start
+        button on it, and the log says why the automatic attempt did not take —
+        an address that no longer exists after a dock was unplugged, or a port
+        another program grabbed first while Windows was still starting up.
+        """
+        if not self.settings.server_running or self.server.running:
+            return {"ok": False, "restored": False}
+        try:
+            self.server.start()
+        except OSError as exc:
+            self._append_log(f"Could not restore the running server: {exc}")
+            log.warning("could not restore the running server: %s", exc)
+            return {"ok": False, "restored": False, "error": str(exc)}
+        self._append_log("Server restored — it was running when the app last closed")
+        return {"ok": True, "restored": True}
 
     # -- settings -----------------------------------------------------------
 
@@ -463,6 +497,12 @@ class Api:
         usually wrong question — a VPN adapter or a second Wi-Fi would drag the
         answer to "public" on a machine serving a private LAN, and then a
         perfectly good rule reads as missing.
+
+        Bound to every interface, though, that *is* the question, and the
+        cautious reading below is the right one: the listener really is on the
+        public network too, so a rule that covers only the private profile does
+        not cover it. ``network_category_for("0.0.0.0")`` answers None, which
+        lands there by itself.
         """
         category = system.network_category_for(self.server.bind_ip or "")
         if category is None:
@@ -941,6 +981,11 @@ def run_gui(simulate: bool = False, *, minimized: bool = False) -> int:
     updates.clear_leftovers()
     if api.settings.check_updates:
         api.check_for_update()
+
+    # Before the window, so a phone that was already paired can connect while the
+    # dashboard is still drawing itself — and so a login start with --minimized,
+    # which nobody is watching, is serving by the time anybody picks up a phone.
+    api.resume_server()
 
     if driver_error:
         api._append_log(f"ViGEmBus driver not available — running in simulation mode: {driver_error}")

@@ -259,11 +259,16 @@ function applyState(state) {
   powerButton.className = 'btn ' + (running ? 'btn-danger' : 'btn-primary');
   $('ip-select').disabled = running;
 
-  const signature = state.ips.join(',');
+  const signature = state.ips.join(',') + '|' + (state.bind_ip || '');
   if (signature !== ipsSignature) {
     ipsSignature = signature;
     const select = $('ip-select');
-    select.innerHTML = '<option value="AUTO">Auto-detect</option>';
+    select.innerHTML = '<option value="AUTO">Auto-detect</option>'
+      // For a PC on two networks at once — a docked laptop, Ethernet plus
+      // Wi-Fi — where one bound address is reachable from one of them and
+      // invisible from the other. The QR code still carries a real address.
+      + '<option value="ALL">All interfaces</option>';
+    if (state.bind_ip === '0.0.0.0') select.value = 'ALL';
     state.ips.forEach((ip) => {
       const option = document.createElement('option');
       option.value = ip;
@@ -281,7 +286,11 @@ function applyState(state) {
     $('qr').classList.add('hidden');
     $('qr-placeholder').classList.remove('hidden');
   }
-  $('pair-target').textContent = running ? state.ip + ':' + state.port : '—';
+  // state.ip is what to dial, which under "All interfaces" is not what was
+  // bound — 0.0.0.0 is an address no phone can connect to.
+  $('pair-target').textContent = running
+    ? state.ip + ':' + state.port + (state.all_interfaces ? ' (all interfaces)' : '')
+    : '—';
   $('token').textContent = state.token || 'no token required';
 
   const banner = $('xinput-banner');

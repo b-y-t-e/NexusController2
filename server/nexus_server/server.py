@@ -13,7 +13,7 @@ from . import protocol as P
 from .config import Settings
 from .desktop import DesktopControl, gyro_to_mouse
 from .devices import DriverUnavailableError, PadBackend, VirtualPad
-from .netinfo import primary_ip
+from .netinfo import ALL_INTERFACES, advertised_ip, primary_ip
 from .padconfig import PadConfig
 from .protocol import (
     ClientOpcode,
@@ -122,9 +122,18 @@ class ControllerServer:
         return self._running.is_set()
 
     @property
+    def advertised_ip(self) -> str:
+        """The address to give a phone — never the wildcard the listener may use."""
+        return advertised_ip(self.bind_ip)
+
+    @property
+    def listening_on_every_interface(self) -> bool:
+        return self.bind_ip == ALL_INTERFACES
+
+    @property
     def pairing_payload(self) -> str:
         return P.encode_pairing_payload(
-            self.bind_ip or primary_ip(),
+            self.advertised_ip,
             self.settings.port,
             self.settings.token if self.settings.require_token else "",
         )
@@ -163,7 +172,15 @@ class ControllerServer:
             self._listener = listener
             self.bind_ip = bind_ip
             self._running.set()
-            self._log(f"Listening on {bind_ip}:{self.settings.port}")
+            if bind_ip == ALL_INTERFACES:
+                # Named, because "Listening on 0.0.0.0" tells the user nothing
+                # about which address to type into a phone that cannot scan.
+                self._log(
+                    f"Listening on every interface, port {self.settings.port} "
+                    f"(pair with {self.advertised_ip})"
+                )
+            else:
+                self._log(f"Listening on {bind_ip}:{self.settings.port}")
 
             if self.settings.manage_firewall:
                 self._firewall = FirewallManager(self.settings.port, self.settings.discovery_port)
@@ -830,7 +847,10 @@ class ControllerServer:
     def snapshot(self) -> dict:
         return {
             "running": self.running,
-            "ip": self.bind_ip,
+            # What to dial, not what was bound: with the wildcard those are not
+            # the same thing, and this one is on the card next to the QR code.
+            "ip": self.advertised_ip if self.running else self.bind_ip,
+            "all_interfaces": self.listening_on_every_interface,
             "port": self.settings.port,
             "name": self.display_name,
             "players": [s.snapshot() for s in self.slots.sessions],

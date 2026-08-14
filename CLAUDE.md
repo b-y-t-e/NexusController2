@@ -136,7 +136,7 @@ and the pywebview UI thread polling `get_state()`.
 
 **Done** — protocol v2 with token pairing; Xbox/DS4/Buzz emulation; 8 players
 (`protocol.MAX_PLAYERS`; only 4 of them can be XInput-backed — see `xinput.py`);
-rumble; offline dashboard; key bindings; XInput capacity detection; 787 server
+rumble; offline dashboard; key bindings; XInput capacity detection; 807 server
 tests + 192 Kotlin tests + hardware smoke test.
 
 **Done, continued** — central configuration (`PROTOCOL.md` §10): live pad preview
@@ -189,6 +189,23 @@ is neither reported as ours nor deleted by our switch. The entry passes
 window — but it is a request, not a promise: `tray.start_hidden()` honours it only
 when the icon actually came up, so the app can never start with neither window
 nor icon, which is exactly the trap `--headless` at login would have been.
+
+The server comes back up by itself when that is where the last session left it
+(`settings.server_running`, restored by `Api.resume_server()` before the window
+is created). The flag is the *user's last decision*, not a snapshot: pressing
+Stop clears it and nothing else does, so quitting, an update, or Windows shutting
+down mid-game all leave it set and the phone finds the server there again. A
+restore that cannot bind — a dock unplugged, a port taken during boot — says so
+in the log and leaves the flag alone, because the dock comes back tomorrow.
+
+`bind_ip` may be `0.0.0.0` (`netinfo.ALL_INTERFACES`, "All interfaces" on the
+page) for a PC that is on two networks at once. The wildcard is only ever a
+*listening* address: everything that names the server to a phone — the QR code,
+the pairing line, the card next to it — goes through `netinfo.advertised_ip()`,
+which answers `primary_ip()` there. The firewall check reads the bound address,
+and `network_category_for("0.0.0.0")` answering None lands on the cautious
+"public" branch by itself, which is right: the listener really is on every
+network, including the ones the private-profile rule does not cover.
 
 Closing the window hides it to the tray instead of quitting, unless the setting
 says otherwise or the icon did not start — `tray.decide_close()` is the whole

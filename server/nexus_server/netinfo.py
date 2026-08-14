@@ -9,6 +9,25 @@ import socket
 log = logging.getLogger(__name__)
 
 LOOPBACK = "127.0.0.1"
+#: Bind here to accept connections on every interface at once.
+#:
+#: The address to *listen* on, never one to connect to: a phone told to dial
+#: 0.0.0.0 gets nowhere. Anything that names the server to somebody else — the
+#: QR code, the pairing line, the firewall's idea of which network this is —
+#: uses :func:`primary_ip` instead. See :func:`advertised_ip`.
+ALL_INTERFACES = "0.0.0.0"
+
+
+def advertised_ip(bind_ip: str) -> str:
+    """The address to hand a phone, for a server bound to ``bind_ip``.
+
+    The same address for every bind but the wildcard one, which has no address
+    of its own — there the best guess at the LAN address is what the QR code has
+    always carried anyway.
+    """
+    if not bind_ip or bind_ip == ALL_INTERFACES:
+        return primary_ip()
+    return bind_ip
 
 
 def primary_ip() -> str:

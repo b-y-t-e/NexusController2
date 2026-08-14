@@ -470,6 +470,137 @@ class TestAutostartAndTray:
         assert api._quitting is True
 
 
+class FakeServer:
+    """A server that records what was asked of it, and can refuse to bind."""
+
+    def __init__(self, refuse: OSError | None = None) -> None:
+        self.running = False
+        self.starts = 0
+        self.stops = 0
+        self.refuse = refuse
+
+    def start(self) -> None:
+        self.starts += 1
+        if self.refuse is not None:
+            raise self.refuse
+        self.running = True
+
+    def stop(self) -> None:
+        self.stops += 1
+        self.running = False
+
+
+class TestResumingTheServer:
+    """Where the last session left the server is where the next one starts.
+
+    Not a snapshot of a moment but the user's last decision: Stop is the only
+    thing that means "stopped". Quitting, closing the window, an update swapping
+    the build, Windows shutting down mid-game — none of those are anybody saying
+    stop, and after any of them the phone should find the server there again.
+    """
+
+    def _api(self, api, refuse: OSError | None = None) -> FakeServer:
+        server = FakeServer(refuse)
+        api.server = server
+        return server
+
+    def test_starting_is_remembered(self, api):
+        self._api(api)
+        assert api.start_server()["ok"] is True
+        assert api.settings.server_running is True
+        assert api.store.load().server_running is True, "it has to survive the process"
+
+    def test_a_port_that_was_taken_is_not_a_state_to_restore(self, api):
+        """The next start would fail the same way, with nobody watching."""
+        self._api(api, refuse=OSError("address already in use"))
+        assert api.start_server()["ok"] is False
+        assert api.settings.server_running is False
+        assert api.store.load().server_running is False
+
+    def test_stopping_is_remembered_too(self, api):
+        server = self._api(api)
+        api.start_server()
+        assert api.stop_server()["ok"] is True
+        assert server.stops == 1
+        assert api.settings.server_running is False
+        assert api.store.load().server_running is False
+
+    def test_it_comes_back_up_when_that_is_where_it_was_left(self, api):
+        server = self._api(api)
+        api.settings.server_running = True
+        assert api.resume_server()["restored"] is True
+        assert server.running is True
+        assert any("restored" in line.lower() for line in api.get_log())
+
+    def test_a_server_the_user_stopped_stays_stopped(self, api):
+        server = self._api(api)
+        api.settings.server_running = False
+        assert api.resume_server()["restored"] is False
+        assert server.starts == 0
+
+    def test_it_never_starts_one_that_is_already_running(self, api):
+        server = self._api(api)
+        server.running = True
+        api.settings.server_running = True
+        assert api.resume_server()["restored"] is False
+        assert server.starts == 0
+
+    def test_a_failure_to_restore_is_reported_not_raised(self, api):
+        """A dock unplugged since yesterday takes the bound address with it. The
+        dashboard is about to open with a Start button on it; this only has to
+        say why it did not press it."""
+        self._api(api, refuse=OSError("cannot assign requested address"))
+        api.settings.server_running = True
+        answer = api.resume_server()
+        assert answer["restored"] is False
+        assert "cannot assign" in answer["error"]
+        assert any("Could not restore" in line for line in api.get_log())
+
+    def test_the_intent_survives_a_failed_restore(self, api):
+        """The dock comes back tomorrow; forgetting here would mean the user has
+        to remember instead."""
+        self._api(api, refuse=OSError("cannot assign requested address"))
+        api.settings.server_running = True
+        api.resume_server()
+        assert api.settings.server_running is True
+
+
+class TestBindingEveryInterface:
+    """A PC on two networks at once serves one of them today.
+
+    A docked laptop with Ethernet and Wi-Fi, a desktop with a second adapter: the
+    listener takes one address and the phone on the other network finds nothing,
+    with no error anywhere to explain it.
+    """
+
+    def test_the_dashboard_word_for_it_is_stored_as_the_wildcard(self, api):
+        api.server = FakeServer()
+        assert api.start_server("ALL")["ok"] is True
+        assert api.settings.bind_ip == "0.0.0.0"
+        assert api.store.load().bind_ip == "0.0.0.0"
+
+    def test_auto_and_a_named_address_still_mean_what_they_did(self, api):
+        api.server = FakeServer()
+        api.start_server("192.168.1.50")
+        assert api.settings.bind_ip == "192.168.1.50"
+        api.start_server("AUTO")
+        assert api.settings.bind_ip == ""
+
+    def test_nonsense_is_still_refused(self, api):
+        api.server = FakeServer()
+        answer = api.start_server("not-an-address")
+        assert answer["ok"] is False and "IPv4" in answer["error"]
+
+    def test_a_phone_is_never_told_to_dial_the_wildcard(self):
+        """0.0.0.0 is where to listen; it is nowhere to connect to. The QR code
+        and the pairing line carry the LAN address, exactly as before."""
+        from nexus_server import netinfo
+
+        assert netinfo.advertised_ip("0.0.0.0") == netinfo.primary_ip()
+        assert netinfo.advertised_ip("") == netinfo.primary_ip()
+        assert netinfo.advertised_ip("192.168.1.50") == "192.168.1.50"
+
+
 class TestUpdates:
     """The dashboard's half of updating: state the page can render, and no surprises.
 
