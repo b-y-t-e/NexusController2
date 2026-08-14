@@ -34,6 +34,7 @@ and needs neither a driver nor a phone — keep new logic on the pure side.
 ```
 server/nexus_server/
   protocol.py  wire format, pure          session.py  slots, rate limiting
+  autostart.py HKCU Run key               tray.py     notification-area icon
   devices.py   VirtualPad + ViGEm + Fake  desktop.py  gated mouse/kbd, key binds
   buzz.py      Buzz mapping + ref HID     xinput.py   XInput slot accounting
   server.py    TCP, handshake, discovery  config.py   settings in %APPDATA%
@@ -135,8 +136,8 @@ and the pywebview UI thread polling `get_state()`.
 
 **Done** — protocol v2 with token pairing; Xbox/DS4/Buzz emulation; 8 players
 (`protocol.MAX_PLAYERS`; only 4 of them can be XInput-backed — see `xinput.py`);
-rumble; offline dashboard; key bindings; XInput capacity detection; 687 server
-tests + 178 Kotlin tests + hardware smoke test.
+rumble; offline dashboard; key bindings; XInput capacity detection; 787 server
+tests + 192 Kotlin tests + hardware smoke test.
 
 **Done, continued** — central configuration (`PROTOCOL.md` §10): live pad preview
 on every player card, drag-and-drop designer, controller-type switch from the PC,
@@ -150,9 +151,57 @@ GitHub releases API (`updates.py`, `UpdateCheck.kt` / `Updater.kt`). The decidin
 half is pure on both sides and the suites never open a socket. Shared rules: an
 asset URL is used only if it starts with our own `releases/download/` prefix; the
 download is checked against the release's `SHA256SUMS.txt`; versions compare
-numerically, never as text; and `/releases/latest` answering 404 means "no
-release yet", not an error — same as being offline, which is a normal state for
-this app and never raises a dialog.
+numerically, never as text; a redirect is followed only while it stays on https,
+because these bytes become the program that runs next and the checksum travels
+the same road; the download is **streamed to a file** and never held in memory,
+on both sides, whatever it wrote is deleted if anything goes wrong, and on the PC
+it is `fsync`ed before the rename — a rename can be committed while the contents
+behind it are not, and this one puts the file under the name of the app; and
+`/releases/latest` answering 404 means "no release yet", not an error — same as
+being offline, which is a normal state for this app and never raises a dialog.
+
+The update state on the PC is `updates.UpdateState` — a small state machine with
+no I/O in it, on the pure side for the same reason as everything else there: its
+rules *are* the correctness of the feature, and they are driven by tests directly
+rather than through a dashboard, a thread and a fake GitHub. Two owners: the
+check worker may only write while the state is still `checking` *and* its
+generation is current, and `install_update` takes it with a compare-and-set. Neither is
+politeness — a check landing over `installing` re-enables the button under a
+running download, and two installs in `install_staged()` can leave the directory
+with no `.exe` at all. `installed` is terminal for the process: the swap has
+happened but this build is still the old one and still reports the old version,
+so anything started from there would offer the release to itself and the second
+install would take the *new* build for the old one.
+
+**Done, and worth knowing about** — starting with Windows and the tray icon.
+The login entry is the per-user `HKCU\…\CurrentVersion\Run` key and nothing else:
+no service, no scheduled task, no Start-up shortcut, because those need
+elevation or a file the user did not put there, and the Run key is the one place
+Task Manager's Start-up tab shows — so it can be turned off without this app.
+The registry *is* the state; nothing about it is kept in `settings.json`, or the
+two would disagree the first time somebody used that tab. Only a frozen build can
+register itself, and the command is quoted (`"C:\Program Files\…"` unquoted is a
+program called `C:\Program`, and the entry then fails silently at every login).
+The identity of an entry is the *program* it names, not the exact text — flags
+change between builds — and it governs both sides: an entry starting another copy
+is neither reported as ours nor deleted by our switch. The entry passes
+`--minimized`, because logging in is not asking to be shown a
+window — but it is a request, not a promise: `tray.start_hidden()` honours it only
+when the icon actually came up, so the app can never start with neither window
+nor icon, which is exactly the trap `--headless` at login would have been.
+
+Closing the window hides it to the tray instead of quitting, unless the setting
+says otherwise or the icon did not start — `tray.decide_close()` is the whole
+rule and it is pure. "Did not start" means pystray's own `setup=` callback ran
+and `visible = True` came back, not that a thread was started: that answer
+decides whether a `--minimized` login shows a window at all, and a thread is not
+an icon anybody can click. Passing a custom `setup=` *replaces* the one pystray
+uses to show the icon, so ours has to set `visible` itself. `Api.quit()` is the
+way out that really ends the process: the tray's own Quit, and the last step of
+an update, which must not leave the old build in the tray holding the port the
+new one wants. `pystray` is a dependency
+the app survives without: no icon means X quits, and the dashboard says so rather
+than showing a switch that lies.
 
 **Next, roughly in order**
 1. Profile library UI: duplicate, rename, import/export a layout as a file.

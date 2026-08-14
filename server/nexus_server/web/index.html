@@ -42,6 +42,8 @@
   <span id="update-text"></span>
   <button class="btn btn-sm" id="update-install">Download and install</button>
   <button class="btn btn-sm btn-ghost" id="update-page">Open the releases page</button>
+  <button class="btn btn-sm btn-ghost hidden" id="update-dismiss">Dismiss</button>
+  <button class="btn btn-sm hidden" id="update-close">Close</button>
 </div>
 
 <main class="layout">
@@ -121,12 +123,24 @@
           <input type="checkbox" id="haptics-toggle" checked>
           <span>Send rumble to phones</span>
         </label>
+        <label class="switch">
+          <input type="checkbox" id="autostart-toggle">
+          <span id="autostart-label">Start with Windows</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" id="tray-toggle" checked>
+          <span id="tray-label">Closing the window keeps it running in the tray</span>
+        </label>
         <!-- The only thing here that talks to anything outside the LAN, so it is
              a visible switch rather than a hidden default. -->
         <label class="switch">
           <input type="checkbox" id="updates-toggle" checked>
           <span>Check GitHub for updates on start</span>
         </label>
+        <!-- Asking again was possible only by restarting the app: the check ran
+             at start-up and nowhere else, so a start with no network, or one
+             failed attempt, meant no updates for the rest of the session. -->
+        <button class="btn btn-sm btn-ghost" id="updates-check">Check now</button>
       </div>
     </div>
 

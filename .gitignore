@@ -33,6 +33,8 @@ android/keystore.properties
 # --- IDE / OS ---
 .idea/
 .vscode/
+# Scratch state from a terminal tool run against this checkout, not part of it.
+.mterminal/
 Thumbs.db
 Desktop.ini
 .DS_Store

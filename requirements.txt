@@ -4,3 +4,6 @@ vgamepad>=0.1.0
 pywebview>=5.0
 qrcode[pil]>=7.4
 pynput>=1.7
+# The notification-area icon. The app runs without it; closing the window then
+# quits instead of hiding, and the dashboard says so.
+pystray>=0.19

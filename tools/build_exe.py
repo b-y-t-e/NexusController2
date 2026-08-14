@@ -112,9 +112,16 @@ def build(driver: Path | None, icon: Path | None) -> int:
         "--name", "NexusController",
         "--paths", str(ROOT / "server"),
         "--add-data", f"{ROOT / 'server' / 'nexus_server' / 'web'}{separator}web",
+        # The tray icon, bundled from the one copy of the logo the repository
+        # keeps. A second, byte-identical file under web/ would be a thing to
+        # forget the next time this one changes.
+        "--add-data", f"{ROOT / 'docs' / 'logo.png'}{separator}web",
         "--collect-all", "vgamepad",
         "--hidden-import", "pynput.keyboard._win32",
         "--hidden-import", "pynput.mouse._win32",
+        # pystray picks its backend at import time, by trying them in turn —
+        # PyInstaller sees no import of the one that wins.
+        "--hidden-import", "pystray._win32",
         "--exclude-module", "tkinter",
         "--exclude-module", "pytest",
     ]

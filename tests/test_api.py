@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from nexus_server import system, updates
+from nexus_server import autostart, system, updates
 from nexus_server.app import Api
 from nexus_server.desktop import FakeDesktop
 from nexus_server.devices import FakeBackend
@@ -375,6 +375,101 @@ def _settled(api, timeout: float = 2.0) -> dict:
     raise AssertionError("the update check never finished")
 
 
+def _writes(payload: bytes):
+    """A stand-in for ``updates.download_to``: puts the bytes where it was told to."""
+    def download_to(release, dest, *args, **kwargs):
+        dest.write_bytes(payload)
+        return dest
+
+    return download_to
+
+
+class TestAutostartAndTray:
+    """The two switches that decide whether the app is there when you want it."""
+
+    def test_a_source_checkout_reports_why_it_cannot_register(self, api):
+        status = api.autostart_status()
+        assert status["supported"] is False
+        assert status["enabled"] is False
+        assert status["reason"]
+
+    def test_toggling_from_a_source_checkout_changes_nothing(self, api):
+        """No .exe to name in the entry — and no silent failure either."""
+        assert api.set_autostart(True)["enabled"] is False
+
+    def test_a_frozen_build_registers_and_unregisters(self, api, tmp_path, monkeypatch):
+        exe = tmp_path / "NexusController.exe"
+        exe.write_bytes(b"build")
+        registry: dict[str, str] = {}
+
+        class Key:
+            def get(self, name):
+                return registry.get(name)
+
+            def set(self, name, value):
+                registry[name] = value
+
+            def delete(self, name):
+                registry.pop(name, None)
+
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.autostart.os.name", "nt")
+        monkeypatch.setattr("nexus_server.autostart.default_key", Key)
+
+        assert api.set_autostart(True)["enabled"] is True
+        assert registry[autostart.VALUE_NAME] == autostart.command_for(exe)
+        assert registry[autostart.VALUE_NAME].endswith(autostart.MINIMIZED_FLAG)
+        assert api.set_autostart(False)["enabled"] is False
+        assert registry == {}
+        assert any("start with Windows" in line for line in api.get_log())
+
+    def test_a_registry_that_refuses_is_reported_not_raised(self, api, tmp_path, monkeypatch):
+        exe = tmp_path / "NexusController.exe"
+        exe.write_bytes(b"build")
+
+        class Locked:
+            def get(self, name):
+                return None
+
+            def set(self, name, value):
+                raise PermissionError("access is denied")
+
+            def delete(self, name):
+                raise PermissionError("access is denied")
+
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.autostart.os.name", "nt")
+        monkeypatch.setattr("nexus_server.autostart.default_key", Locked)
+
+        answer = api.set_autostart(True)
+        assert answer["enabled"] is False
+        assert "denied" in answer["error"]
+
+    def test_the_tray_switch_says_when_there_is_no_tray(self, api):
+        """Headless and every test: no icon, so closing cannot mean hiding."""
+        state = api.window_state()
+        assert state["tray_running"] is False
+        assert state["close_to_tray"] is True     # the setting, which is not the same thing
+
+    def test_the_icon_is_not_the_page_s_to_stop(self, api):
+        """pywebview publishes every public attribute of this object and recurses
+        into what it finds, so a public `tray` would put `api.tray.stop()` on the
+        page — an icon the dashboard can remove while the window is open, leaving
+        a close that hides into nothing."""
+        assert not hasattr(api, "tray")
+        assert not hasattr(api, "quitting")
+
+    def test_the_setting_is_remembered(self, api):
+        assert api.set_close_to_tray(False) is False
+        assert api.store.load().close_to_tray is False
+
+    def test_quitting_is_not_a_close_to_the_tray(self, api):
+        """quit() is the tray's own Quit and the second half of an update: the
+        new build is already running and wants the port this one holds."""
+        api.quit()
+        assert api._quitting is True
+
+
 class TestUpdates:
     """The dashboard's half of updating: state the page can render, and no surprises.
 
@@ -441,7 +536,9 @@ class TestUpdates:
             def start(self):
                 raise RuntimeError("can't start new thread")
 
-        monkeypatch.setattr("nexus_server.app.threading.Thread", RefusesToStart)
+        # Handed to this Api only: replacing threading.Thread for the whole
+        # process would take the suite's own machinery with it.
+        api._thread_factory = RefusesToStart
         status = api.check_for_update()
 
         assert status["state"] == "error"
@@ -518,7 +615,7 @@ class TestUpdates:
     def test_installing_where_it_cannot_write_is_refused(self, api, tmp_path, monkeypatch):
         exe = tmp_path / "NexusController.exe"
         monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
-        monkeypatch.setattr("nexus_server.updates.writable", lambda path: False)
+        monkeypatch.setattr("nexus_server.updates.writable", lambda path, **k: False)
         result = api.install_update()
         assert result["ok"] is False
         assert "No permission" in result["error"]
@@ -533,7 +630,7 @@ class TestUpdates:
         started: list = []
         monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
         monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: release)
-        monkeypatch.setattr("nexus_server.updates.download", lambda *a, **k: b"new build")
+        monkeypatch.setattr("nexus_server.updates.download_to", _writes(b"new build"))
         monkeypatch.setattr("nexus_server.updates.relaunch", lambda path, **k: started.append(path))
 
         result = api.install_update()
@@ -553,13 +650,301 @@ class TestUpdates:
         def refuse(*args, **kwargs):
             raise updates.UpdateError("does not match its checksum")
 
-        monkeypatch.setattr("nexus_server.updates.download", refuse)
+        monkeypatch.setattr("nexus_server.updates.download_to", refuse)
         result = api.install_update()
 
         assert result["ok"] is False
         assert exe.read_bytes() == b"old build"
-        assert api.update_status()["state"] == "error"
         assert any("Update failed" in line for line in api.get_log())
+
+        # The attempt failed; the release did not go anywhere. Dropping to
+        # "error" took the offer off the page, and once the message was
+        # dismissed there was no button left to try again with — and nothing
+        # runs a check by itself, so that lasted until the app was restarted.
+        status = api.update_status()
+        assert status["state"] == "available"
+        assert status["latest"] == "99.0.0"
+        assert "checksum" in status["error"]
+
+    def test_a_build_that_will_not_start_is_still_an_installed_build(
+        self, api, tmp_path, monkeypatch
+    ):
+        """Failing to start it is a smaller problem with a different answer.
+
+        Reported as a failed update it was worse than useless: the state went
+        back to "available" and offered to install the version already on disk —
+        and that second run would move the *new* build aside as the old one and
+        throw away the only copy of what was there before.
+        """
+        exe = tmp_path / "NexusController.exe"
+        exe.write_bytes(b"old build")
+        release = updates.Release(
+            tag="v99.0.0",
+            assets={"NexusController.exe": updates.DOWNLOAD_PREFIX + "v99.0.0/NexusController.exe"},
+        )
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.updates.writable", lambda path, **k: True)
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: release)
+        monkeypatch.setattr("nexus_server.updates.download_to", _writes(b"new build"))
+
+        def refuses(path, **kwargs):
+            raise updates.UpdateError("the update is installed but could not be started")
+
+        monkeypatch.setattr("nexus_server.updates.relaunch", refuses)
+        result = api.install_update()
+
+        assert result["ok"] is True
+        assert result["restarting"] is False
+        assert "start Nexus Controller again" in result["error"]
+        assert exe.read_bytes() == b"new build"
+        assert updates.backup_for(exe).read_bytes() == b"old build"
+        assert api.update_status()["state"] == "installed"
+
+    def test_once_installed_nothing_offers_to_install_it_again(
+        self, api, tmp_path, monkeypatch
+    ):
+        """"installed" is where this process stops.
+
+        The swap has happened, but *this* build is still the old one and still
+        reports the old version — so a check would find the release newer than
+        itself and offer it again, and a second install would move the new build
+        aside as if it were the old one, throwing away the only copy of what was
+        there before. The window stays open exactly when the new build could not
+        be started, which is when a user is most likely to press the button
+        again.
+        """
+        exe = tmp_path / "NexusController.exe"
+        exe.write_bytes(b"old build")
+        release = updates.Release(
+            tag="v99.0.0",
+            assets={"NexusController.exe": updates.DOWNLOAD_PREFIX + "v99.0.0/NexusController.exe"},
+        )
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.updates.writable", lambda path, **k: True)
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: release)
+        monkeypatch.setattr("nexus_server.updates.download_to", _writes(b"new build"))
+        monkeypatch.setattr("nexus_server.updates.relaunch", lambda path, **k: None)
+        assert api.install_update()["ok"] is True
+
+        again = api.install_update()
+        assert again["ok"] is False
+        assert "already installed" in again["error"]
+        assert api.check_for_update()["state"] == "installed"
+        assert api.update_status()["state"] == "installed"
+        assert updates.backup_for(exe).read_bytes() == b"old build"
+
+    def test_a_dismissed_failure_does_not_come_back_with_the_offer(
+        self, api, tmp_path, monkeypatch
+    ):
+        """The page keeps one copy of the sentence and the state keeps another."""
+        exe = tmp_path / "NexusController.exe"
+        exe.write_bytes(b"old build")
+        release = updates.Release(
+            tag="v99.0.0",
+            assets={"NexusController.exe": updates.DOWNLOAD_PREFIX + "v99.0.0/NexusController.exe"},
+        )
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.updates.writable", lambda path, **k: True)
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: release)
+
+        def refuse(*args, **kwargs):
+            raise updates.UpdateError("does not match its checksum")
+
+        monkeypatch.setattr("nexus_server.updates.download_to", refuse)
+        api.install_update()
+        assert api.update_status()["error"]
+
+        status = api.dismiss_update_error()
+        assert status["error"] is None
+        # And the offer is still standing, which is the point of keeping it.
+        assert api.update_status()["state"] == "available"
+
+    def test_an_install_that_never_found_a_release_has_no_offer_to_put_back(
+        self, api, tmp_path, monkeypatch
+    ):
+        exe = tmp_path / "NexusController.exe"
+        exe.write_bytes(b"old build")
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.updates.writable", lambda path, **k: True)
+
+        def offline(**kwargs):
+            raise updates.UpdateError("could not reach GitHub")
+
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", offline)
+        assert api.install_update()["ok"] is False
+        assert api.update_status()["state"] == "error"
+
+    def test_a_check_that_lands_during_an_install_does_not_take_the_state_back(
+        self, api, tmp_path, monkeypatch
+    ):
+        """The check worker owns "checking" and nothing else.
+
+        A check started a moment before the user pressed the button was still in
+        flight when the install began, and wrote its answer over "installing" —
+        which the page reads as "available", so the button came back to life
+        under a download that was still running. A second install then raced the
+        first through the rename in updates.install_staged(), where one moves the
+        running .exe aside while the other is looking for it.
+        """
+        newer = updates.Release(
+            tag="v99.0.0",
+            assets={"NexusController.exe": updates.DOWNLOAD_PREFIX + "v99.0.0/NexusController.exe"},
+        )
+        entered, finish = threading.Event(), threading.Event()
+        workers: list[threading.Thread] = []
+
+        class Recorded(threading.Thread):
+            def start(self):
+                workers.append(self)
+                super().start()
+
+        def parked(**kwargs):
+            entered.set()
+            finish.wait(5)
+            return newer
+
+        api._thread_factory = Recorded
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", parked)
+        api.check_for_update()
+        assert entered.wait(5), "the check never started"
+
+        exe = tmp_path / "NexusController.exe"
+        exe.write_bytes(b"old build")
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.updates.writable", lambda path, **k: True)
+        monkeypatch.setattr("nexus_server.updates.download_to", _writes(b"new build"))
+        monkeypatch.setattr("nexus_server.updates.relaunch", lambda path, **k: None)
+        # The install does not ask GitHub through the parked function: it is
+        # given its own answer, exactly as it would have on a real machine where
+        # the two calls are separate requests.
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: newer)
+
+        assert api.install_update()["ok"] is True
+        assert api.update_status()["state"] == "installed"
+
+        finish.set()                       # now let the check finish
+        workers[0].join(5)
+        assert not workers[0].is_alive(), "the check worker never finished"
+        assert api.update_status()["state"] == "installed"
+
+    def test_an_overtaken_check_does_not_answer_in_a_later_one_s_name(
+        self, api, tmp_path, monkeypatch
+    ):
+        """"The state still says checking" is not the same question as "is this
+        still the check that set it".
+
+        A check parked on a slow network, an install, then a second check: by the
+        time the first one comes back the state says "checking" again — for
+        somebody else. Its answer is from before the install ran.
+        """
+        newer = updates.Release(
+            tag="v99.0.0",
+            assets={"NexusController.exe": updates.DOWNLOAD_PREFIX + "v99.0.0/NexusController.exe"},
+        )
+        workers: list[threading.Thread] = []
+
+        class Recorded(threading.Thread):
+            def start(self):
+                workers.append(self)
+                super().start()
+
+        first_in, first_out = threading.Event(), threading.Event()
+        second_in, second_out = threading.Event(), threading.Event()
+
+        def parked_first(**kwargs):
+            first_in.set()
+            first_out.wait(5)
+            return newer                       # "there is an update" — the stale answer
+
+        def parked_second(**kwargs):
+            second_in.set()
+            second_out.wait(5)
+            return None
+
+        api._thread_factory = Recorded
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", parked_first)
+        api.check_for_update()
+        assert first_in.wait(5)
+
+        # An install in between, which fails — so the state goes back to the
+        # offer rather than to "installed", and a later check may run at all.
+        exe = tmp_path / "NexusController.exe"
+        exe.write_bytes(b"old build")
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.updates.writable", lambda path, **k: True)
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: newer)
+
+        def refuse(*args, **kwargs):
+            raise updates.UpdateError("does not match its checksum")
+
+        monkeypatch.setattr("nexus_server.updates.download_to", refuse)
+        assert api.install_update()["ok"] is False
+
+        # The second check claims the state — and is still running when the first
+        # one comes back, so "the state says checking" is true and says nothing.
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", parked_second)
+        api.check_for_update()
+        assert second_in.wait(5)
+
+        first_out.set()
+        workers[0].join(5)
+        assert api.update_status()["state"] == "checking", "the stale answer was written"
+
+        second_out.set()
+        workers[1].join(5)
+        assert api.update_status()["state"] == "none"
+
+    def test_a_second_install_while_one_runs_is_refused(self, api, tmp_path, monkeypatch):
+        """Two of these in the rename dance is the one way to end up with no .exe."""
+        exe = tmp_path / "NexusController.exe"
+        exe.write_bytes(b"old build")
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.updates.writable", lambda path, **k: True)
+        newer = updates.Release(
+            tag="v99.0.0",
+            assets={"NexusController.exe": updates.DOWNLOAD_PREFIX + "v99.0.0/NexusController.exe"},
+        )
+        second: list[dict] = []
+
+        def fetch_latest_and_try_again(**kwargs):
+            # From inside the first install, which is what a second click on a
+            # button the page re-enabled would do.
+            second.append(api.install_update())
+            return newer
+
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", fetch_latest_and_try_again)
+        monkeypatch.setattr("nexus_server.updates.download_to", _writes(b"new build"))
+        monkeypatch.setattr("nexus_server.updates.relaunch", lambda path, **k: None)
+
+        assert api.install_update()["ok"] is True
+        assert second[0]["ok"] is False
+        assert "already being installed" in second[0]["error"]
+        assert exe.read_bytes() == b"new build"
+
+    def test_a_check_asked_for_during_an_install_is_not_started(self, api, tmp_path, monkeypatch):
+        exe = tmp_path / "NexusController.exe"
+        exe.write_bytes(b"old build")
+        monkeypatch.setattr("nexus_server.updates.running_executable", lambda: exe)
+        monkeypatch.setattr("nexus_server.updates.writable", lambda path, **k: True)
+        newer = updates.Release(
+            tag="v99.0.0",
+            assets={"NexusController.exe": updates.DOWNLOAD_PREFIX + "v99.0.0/NexusController.exe"},
+        )
+        during: list[dict] = []
+
+        def fetch_latest_and_check(**kwargs):
+            during.append(api.check_for_update())
+            return newer
+
+        monkeypatch.setattr("nexus_server.updates.fetch_latest", fetch_latest_and_check)
+        monkeypatch.setattr("nexus_server.updates.download_to", _writes(b"new build"))
+        monkeypatch.setattr("nexus_server.updates.relaunch", lambda path, **k: None)
+
+        assert api.install_update()["ok"] is True
+        # The refusal answers with the whole status the page renders, not the
+        # bare state dict — it is the same call the page would make next anyway.
+        assert during[0]["state"] == "installing"
+        assert "enabled" in during[0] and "can_install" in during[0]
 
     def test_the_check_can_be_turned_off_and_is_remembered(self, api, monkeypatch):
         monkeypatch.setattr("nexus_server.updates.fetch_latest", lambda **k: None)

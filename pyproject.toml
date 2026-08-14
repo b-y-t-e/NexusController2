@@ -12,6 +12,9 @@ dependencies = [
     "pywebview>=5.0",
     "qrcode[pil]>=7.4",
     "pynput>=1.7",
+    # The notification-area icon. Optional at runtime — the app starts and runs
+    # without it, and then closing the window quits as it always did.
+    "pystray>=0.19",
 ]
 
 [project.optional-dependencies]

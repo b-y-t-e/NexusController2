@@ -90,6 +90,10 @@ class Settings:
     #: connection this app makes; everything else it does is on the LAN. A failed
     #: check is silent, so turning this off costs nothing but the notice.
     check_updates: bool = True
+    #: Closing the window puts the app in the notification area instead of ending
+    #: it. Off means X quits, which is what it did before the tray existed — and
+    #: what happens anyway when the tray cannot start.
+    close_to_tray: bool = True
     #: Try to add an inbound Windows Firewall rule on start (private profile only).
     manage_firewall: bool = True
     #: Set up ``adb reverse`` for USB mode on start.

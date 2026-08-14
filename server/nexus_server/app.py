@@ -19,8 +19,9 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Callable
 
-from . import __version__, updates
+from . import __version__, autostart, tray, updates
 from .config import Settings, SettingsStore, generate_token
 from .desktop import DesktopControl, create_backend
 from .devices import DriverUnavailableError, FakeBackend, PadBackend, VGamepadBackend
@@ -87,11 +88,27 @@ class Api:
         self._pps_last_total = 0
         self._pps_last_time = time.monotonic()
         self._pps = 0
-        #: What the dashboard is told about updates; replaced wholesale, never
-        #: mutated in place, so the UI thread reading it never sees a half-written
-        #: answer while the checking thread writes one.
-        self._update: dict = {"state": "idle", "current": __version__}
-        self._update_lock = threading.Lock()
+        #: What the dashboard is told about updates, and the rules about who
+        #: may write it — a state machine of its own, with no I/O in it.
+        self._update = updates.UpdateState(__version__)
+        #: The notification-area icon, once run_gui() has one. None everywhere
+        #: else — headless, and every test. Underscored for the reason spelled
+        #: out below: public and it would be the page's to start and stop.
+        self._tray = None
+        #: Set when the app is ending on purpose rather than being closed to the
+        #: tray: the tray's own Quit, and the last step of an update.
+        self._quitting = False
+        #: How the update check gets its thread. A seam, not a setting: nothing
+        #: in the app passes anything else, and a test replaces it here rather
+        #: than replacing ``threading.Thread`` for the whole process — to hand
+        #: out one that refuses to start, or to wait for the real one to finish.
+        #: Underscored because pywebview walks every public attribute of this
+        #: class and *recurses* into the objects it finds, publishing their
+        #: public methods too: a bare Thread here would put Thread's own methods
+        #: on window.pywebview.api, and a public ``tray`` would hand the page
+        #: ``api.tray.stop()``. The rule is about names, not about callables —
+        #: which is also why the icon and the quitting flag above are private.
+        self._thread_factory: Callable[..., threading.Thread] = threading.Thread
 
     # -- logging ------------------------------------------------------------
 
@@ -625,19 +642,9 @@ class Api:
 
     # -- updates ------------------------------------------------------------
 
-    def _set_update(self, **fields) -> dict:
-        """Replace the update state, keeping the parts nobody is changing."""
-        with self._update_lock:
-            state = dict(self._update)
-            state.update(fields)
-            state["current"] = __version__
-            self._update = state
-            return dict(state)
-
     def update_status(self) -> dict:
         """What the dashboard shows. Never blocks — the work happens elsewhere."""
-        with self._update_lock:
-            state = dict(self._update)
+        state = self._update.snapshot()
         exe = updates.running_executable()
         state.update(
             {
@@ -653,11 +660,18 @@ class Api:
         return state
 
     def check_for_update(self) -> dict:
-        """Ask GitHub, in the background. The answer arrives via :meth:`update_status`."""
-        with self._update_lock:
-            if self._update.get("state") in {"checking", "installing"}:
-                return dict(self._update)
-            self._update = {**self._update, "state": "checking", "error": None}
+        """Ask GitHub, in the background. The answer arrives via :meth:`update_status`.
+
+        Only the asking is here; who may write the answer down is
+        :class:`updates.UpdateState`.
+        """
+        generation = self._update.begin_check()
+        if generation is None:
+            # Refused. The state says why — but not reliably: by the time this is
+            # read the check that held it may have finished, so the page is told
+            # in so many words that nothing was started rather than being left to
+            # infer it from a state that has already moved on.
+            return {**self.update_status(), "started": False}
 
         def work() -> None:
             try:
@@ -668,42 +682,49 @@ class Api:
                 # app is expressly meant to work on, so it goes to the state the
                 # dashboard can choose to show and not into the log or a dialog.
                 log.info("update check failed: %s", exc)
-                self._set_update(state="error", error=str(exc))
+                self._update.check_failed(generation, str(exc))
                 return
             except Exception as exc:  # noqa: BLE001 - see below
                 # Anything else is a bug in here, not a network problem — but the
                 # state machine must not care which it was. "checking" is a state
-                # nothing else can leave, and check_for_update() refuses to start
-                # while it is set, so an escaping exception would jam every later
-                # check for the life of the process. On a daemon thread nobody
-                # would even see the traceback.
+                # nothing else can leave, and a check refuses to start while it is
+                # set, so an escaping exception would jam every later check for the
+                # life of the process. On a daemon thread nobody would even see the
+                # traceback.
                 log.exception("update check raised")
-                self._set_update(state="error", error=f"the update check failed: {exc}")
+                self._update.check_failed(generation, f"the update check failed: {exc}")
                 return
-            if release is None:
-                self._set_update(state="none", latest=None, error=None)
+            if release is None or not updates.is_newer(__version__, release.version):
+                # No release at all, or nothing newer: the same answer.
+                self._update.check_found_nothing(generation)
                 return
-            available = updates.is_newer(__version__, release.version)
-            self._set_update(
-                state="available" if available else "none",
-                latest=release.version,
-                tag=release.tag,
-                error=None,
-                has_asset=release.url(updates.ASSET_NAME) is not None,
-            )
+            self._update.check_found(generation, release)
 
         try:
-            threading.Thread(target=work, name="update-check", daemon=True).start()
+            self._thread_factory(target=work, name="update-check", daemon=True).start()
         except RuntimeError as exc:
-            # Out of OS threads. The state was set to "checking" a few lines up,
-            # and nothing but the worker ever clears it — so without this the
-            # check that never ran would block every later one for the life of
-            # the process, which is the same jam the worker itself guards
-            # against. ControllerServer._accept_loop already treats a thread
-            # that will not start as a real thing to handle rather than a
-            # theoretical one.
+            # Out of OS threads. The state was claimed a few lines up and nothing
+            # but the worker ever clears it — so without this the check that never
+            # ran would block every later one for the life of the process.
+            # ControllerServer._accept_loop already treats a thread that will not
+            # start as a real thing to handle rather than a theoretical one.
             log.warning("could not start the update check: %s", exc)
-            self._set_update(state="error", error=f"could not start the update check: {exc}")
+            self._update.check_failed(generation, f"could not start the update check: {exc}")
+            return {**self.update_status(), "started": False}
+        return {**self.update_status(), "started": True}
+
+    def dismiss_update_error(self) -> dict:
+        """Forget the last failure, because the user has read it.
+
+        The page keeps its own copy of the sentence until Dismiss is pressed, and
+        the state keeps one so the offer can say why it is being made a second
+        time. Both have to go, or dismissing only silences the louder of two
+        copies of the same news and the quieter one comes straight back.
+
+        Answers with the same shape as :meth:`update_status`, like everything
+        else the page calls — it is what the page renders next.
+        """
+        self._update.clear_error()
         return self.update_status()
 
     def install_update(self) -> dict:
@@ -716,24 +737,37 @@ class Api:
         exe = updates.running_executable()
         if exe is None:
             return {"ok": False, "error": "This is a source checkout — update it with git"}
-        if not updates.writable(exe):
+        # recheck: the cached answer exists so that polling the status twenty
+        # times a minute does not create a file beside the .exe each time. This
+        # is the one call that is about to act on it, and the directory can have
+        # changed since — the app moved into Program Files, a policy applied.
+        if not updates.writable(exe, recheck=True):
             return {
                 "ok": False,
                 "error": f"No permission to replace {exe.name} — download it from the releases page",
             }
 
-        self._set_update(state="installing", error=None)
+        # Compare-and-set inside the state machine: two installs at once would
+        # both go through the rename in updates.install_staged(), where one moves
+        # the running .exe aside while the other is looking for it.
+        refusal = self._update.begin_install()
+        if refusal is not None:
+            return {"ok": False, "error": refusal}
+
+        release = None
         try:
             release = updates.fetch_latest()
             if release is None or not updates.is_newer(__version__, release.version):
-                self._set_update(state="none")
+                self._update.nothing_newer()
                 return {"ok": False, "error": "There is no newer release"}
-            payload = updates.download(release)
-            updates.install(payload, exe)
-            updates.relaunch(exe)
+            # Straight to a file beside the .exe, never through memory: the same
+            # rule the phone follows, and the reason is the same — the asset is
+            # tens of megabytes and the cap that stops a hostile URL is 300.
+            staged = updates.download_to(release, updates.staged_for(exe))
+            updates.install_staged(staged, exe)
         except updates.UpdateError as exc:
             self._append_log(f"Update failed: {exc}")
-            self._set_update(state="error", error=str(exc))
+            self._update.install_failed(str(exc), release)
             return {"ok": False, "error": str(exc)}
         except Exception as exc:  # noqa: BLE001 - the state must be left usable
             # Same reasoning as the check, and worse: "installing" disables the
@@ -743,12 +777,82 @@ class Api:
             log.exception("update install raised")
             message = f"the update failed unexpectedly: {exc}"
             self._append_log(f"Update failed: {message}")
-            self._set_update(state="error", error=message)
+            self._update.install_failed(message, release)
             return {"ok": False, "error": message}
 
-        self._set_update(state="installed")
+        # From here the new build is in place, and nothing that happens next can
+        # make that untrue. Failing to start it is a smaller problem with a
+        # different answer — the user starts it themselves — and reporting it as
+        # a failed update was worse than useless: the state went back to
+        # "available" and offered to install the version already on disk, which
+        # on the second run would move the *new* build aside as if it were the
+        # old one and throw away the only copy of what was there before.
+        self._update.installed()
+        try:
+            updates.relaunch(exe)
+        except Exception as exc:  # noqa: BLE001 - see the install path above
+            # relaunch() turns OSError into UpdateError, but this call is the
+            # last thing standing between a finished update and the page, and
+            # anything escaping it here would reach the bridge as a rejected
+            # promise for an update that actually succeeded.
+            log.warning("installed but could not start the new build: %s", exc)
+            self._append_log(f"Updated to {release.version}, but could not start it: {exc}")
+            self._update.installed(error=str(exc))
+            return {
+                "ok": True,
+                "restarting": False,
+                "version": release.version,
+                "error": f"{exc} — close this window and start Nexus Controller again",
+            }
+
         self._append_log(f"Updated to {release.version} — restarting")
         return {"ok": True, "restarting": True, "version": release.version}
+
+    # -- starting with Windows ----------------------------------------------
+
+    def autostart_status(self) -> dict:
+        """Whether this build starts with Windows, and whether it even could.
+
+        Read from the registry every time rather than kept in ``settings.json``:
+        Task Manager's Start-up tab can turn the entry off, and two answers to
+        one question drift apart the moment somebody uses it.
+        """
+        exe = updates.running_executable()
+        supported = autostart.supported(exe)
+        try:
+            return {
+                "supported": supported,
+                "enabled": autostart.enabled(exe),
+                # Said plainly, because "unavailable" with no reason is the kind
+                # of greyed-out switch people file bugs about.
+                "reason": "" if supported else (
+                    "Only the packaged .exe can register itself — this is a source checkout"
+                    if os.name == "nt" else "Windows only"
+                ),
+            }
+        except OSError as exc:  # pragma: no cover - the registry is unreachable
+            log.warning("could not read the autostart entry: %s", exc)
+            return {"supported": False, "enabled": False, "reason": str(exc)}
+
+    def set_autostart(self, enabled: bool) -> dict:
+        """Add or remove the login entry. Answers with the state that resulted."""
+        exe = updates.running_executable()
+        if not autostart.supported(exe):
+            return self.autostart_status()
+        try:
+            if enabled:
+                autostart.enable(exe)
+                self._append_log("Nexus Controller will start with Windows")
+            else:
+                autostart.disable(exe)
+                self._append_log("Nexus Controller will no longer start with Windows")
+        except OSError as exc:
+            # A locked-down machine can refuse even HKCU. Nothing else in the app
+            # is affected, so this reports and carries on.
+            log.warning("could not change the autostart entry: %s", exc)
+            self._append_log(f"Could not change the start-with-Windows setting: {exc}")
+            return {**self.autostart_status(), "error": str(exc)}
+        return self.autostart_status()
 
     def set_check_updates(self, enabled: bool) -> bool:
         self.settings.check_updates = bool(enabled)
@@ -762,13 +866,16 @@ class Api:
 
         webbrowser.open(updates.RELEASES_PAGE)
 
-    def close_window(self) -> None:
-        """Close the dashboard from the page, after the update has been started.
+    def quit(self) -> None:
+        """End the app for real — from the tray menu, or after an update.
 
-        The new build is already running by the time this is called, and two
-        copies of the app cannot both hold the port — so this is the second half
-        of :meth:`install_update`, not a general-purpose quit button.
+        One method and one name. The page calls it as the second half of
+        :meth:`install_update`: the new build is already running by then, and two
+        copies cannot both hold the port. That is also why :attr:`_quitting` is
+        set — with the tray in place an ordinary close only hides the window, and
+        hiding here would leave the old build holding the port the new one wants.
         """
+        self._quitting = True
         try:
             import webview  # noqa: PLC0415
 
@@ -776,6 +883,18 @@ class Api:
                 window.destroy()
         except Exception:  # noqa: BLE001 - closing must not raise into the page
             log.exception("could not close the dashboard window")
+
+    def set_close_to_tray(self, enabled: bool) -> bool:
+        self.settings.close_to_tray = bool(enabled)
+        self._persist()
+        return self.settings.close_to_tray
+
+    def window_state(self) -> dict:
+        """What the page needs to draw the tray-related switch."""
+        return {
+            "close_to_tray": self.settings.close_to_tray,
+            "tray_running": self._tray is not None and self._tray.running,
+        }
 
     def shutdown(self) -> None:
         self.server.stop()
@@ -806,7 +925,7 @@ def _make_backend(simulate: bool) -> tuple[PadBackend, bool, str | None]:
         return FakeBackend(), True, str(exc)
 
 
-def run_gui(simulate: bool = False) -> int:
+def run_gui(simulate: bool = False, *, minimized: bool = False) -> int:
     import webview  # noqa: PLC0415
 
     backend, simulated, driver_error = _make_backend(simulate)
@@ -817,7 +936,9 @@ def run_gui(simulate: bool = False) -> int:
     # GitHub would make the tests depend on the network — and, on a machine
     # without one, wait for a DNS timeout each time. This is the I/O shell; the
     # check belongs in it.
-    updates.clear_backup()   # the build the last update replaced; nothing holds it now
+    # The build the last update replaced, and a download that never finished:
+    # both are only removable when nothing is using them, which is now.
+    updates.clear_leftovers()
     if api.settings.check_updates:
         api.check_for_update()
 
@@ -826,7 +947,62 @@ def run_gui(simulate: bool = False) -> int:
     elif simulated:
         api._append_log("Simulation mode: no virtual controller will be created")
 
-    window = webview.create_window(
+    # The icon goes up before the window exists, because whether the window is
+    # shown at all depends on whether the icon came up: --minimized is only
+    # honoured with somewhere to be minimised to. So for a moment there is a
+    # clickable menu and no window, and `window` really is unbound in these
+    # closures — hence the guard rather than a promise that it cannot happen.
+    window = None
+
+    def show_window() -> None:
+        # From the tray thread. show() alone leaves it behind whatever the user
+        # was doing, and the point of the menu item is to be looking at it.
+        if window is None:
+            log.info("tray: the dashboard is still starting")
+            return
+        # Between create_window() and webview.start() the window object exists
+        # but has no GUI yet; pywebview's own show() waits for that and gives up
+        # after 20 seconds, which Tray._call() would then log as a failure. This
+        # is the same window either way, so waiting is the right answer.
+        window.show()
+        try:
+            window.restore()
+        except Exception:  # noqa: BLE001 - not every backend has it
+            log.debug("could not restore the window", exc_info=True)
+
+    def quit_app() -> None:
+        api.quit()
+
+    # From here on there is something to clean up whatever happens: an icon on a
+    # thread, and a server the page may have started. create_window() is inside
+    # this on purpose — it can fail (a missing WebView2 runtime is the usual
+    # way), and without it the icon stayed in the notification area for a window
+    # that never opened.
+    try:
+        api._tray = tray.Tray(
+            on_open=show_window,
+            on_quit=quit_app,
+            image_source=_tray_image_source(),
+        )
+        if api._tray.start():
+            log.info("tray icon running")
+
+        hidden = tray.start_hidden(minimized=minimized, tray_running=api._tray.running)
+        if minimized and not hidden:
+            log.info("asked to start minimized, but there is no tray icon to hide into")
+
+        window = _create_window(webview, api, hidden=hidden)
+        window.events.closing += _closing_handler(api, window)
+        webview.start(debug=False)
+    finally:
+        if api._tray is not None:
+            api._tray.stop()
+        api.shutdown()
+    return 0
+
+
+def _create_window(webview, api: Api, *, hidden: bool):
+    return webview.create_window(
         f"Nexus Controller {__version__}",
         str(WEB_DIR / "index.html"),
         js_api=api,
@@ -834,12 +1010,43 @@ def run_gui(simulate: bool = False) -> int:
         height=780,
         min_size=(900, 640),
         background_color="#0b0f14",
+        hidden=hidden,
     )
-    try:
-        webview.start(debug=False)
-    finally:
-        api.shutdown()
-    return 0
+
+
+def _closing_handler(api: Api, window):
+    """Answer pywebview's "may I close?": False keeps the window alive.
+
+    The whole tray feature is this one hook. Everything it depends on — the
+    setting, whether the icon really came up, whether this is an update quitting
+    on purpose — is decided in tray.decide_close(), where it is tested; here
+    there is only the hiding.
+    """
+    def on_closing() -> bool:
+        decision = tray.decide_close(
+            to_tray=api.settings.close_to_tray,
+            tray_running=api._tray is not None and api._tray.running,
+            quitting=api._quitting,
+        )
+        log.info("window close: %s", decision.reason)
+        if not decision.hide:
+            return True
+        window.hide()
+        return False
+
+    return on_closing
+
+
+def _tray_image_source() -> Path | None:
+    """The logo, wherever this build keeps it."""
+    candidates = (
+        _resource_dir() / "web" / "logo.png",          # frozen: bundled beside the page
+        Path(__file__).parents[2] / "docs" / "logo.png",   # a source checkout
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def run_headless(simulate: bool = False) -> int:
@@ -854,7 +1061,7 @@ def run_headless(simulate: bool = False) -> int:
     # The same housekeeping the windowed app does. A machine that only ever runs
     # headless — an autostart entry, a spare PC in the corner — kept every build
     # an update had ever replaced, because the only call to this was over there.
-    updates.clear_backup()
+    updates.clear_leftovers()
 
     store = SettingsStore()
     settings = store.load()
@@ -891,8 +1098,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="do not create real virtual pads (no ViGEmBus needed)",
     )
+    # What the login entry passes; see autostart.command_for(). Honoured only if
+    # the tray icon comes up, so this can never hide the app beyond reach.
+    parser.add_argument(
+        "--minimized", action="store_true", help="start in the notification area"
+    )
     args = parser.parse_args(argv)
-    return run_headless(args.simulate) if args.headless else run_gui(args.simulate)
+    if args.headless:
+        return run_headless(args.simulate)
+    return run_gui(args.simulate, minimized=args.minimized)
 
 
 if __name__ == "__main__":
