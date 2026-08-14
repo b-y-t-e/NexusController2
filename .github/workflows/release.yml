@@ -12,12 +12,37 @@ jobs:
   server:
     name: Windows executable
     runs-on: windows-latest
+    # Nothing here takes ten minutes. The first tagged build sat in "Install
+    # dependencies" for the best part of an hour (see the step below) with no
+    # way to tell a hang from slow work, so this is the difference between a
+    # failed run and a run that never ends.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      # vgamepad ships as an sdist only, and its setup.py runs `msiexec /i` on
+      # the ViGEmBus MSI it carries — *interactively*, whenever the driver is not
+      # already installed. On a runner that dialog has nobody to answer it and
+      # pip waits for ever. So the driver goes in silently first; vgamepad's own
+      # detection then finds it in the registry and installs nothing.
+      - name: Install ViGEmBus, so vgamepad's own installer stays quiet
+        shell: pwsh
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP "vgamepad"
+          # --no-binary/-d only fetches and runs egg_info, which setup.py
+          # explicitly excludes from the msiexec call above.
+          python -m pip download vgamepad --no-deps --no-binary :all: -d $work
+          $sdist = Get-ChildItem "$work\*.tar.gz" | Select-Object -First 1
+          tar -xzf $sdist.FullName -C $work
+          $msi = Get-ChildItem $work -Recurse -Filter ViGEmBusSetup_x64.msi | Select-Object -First 1
+          if (-not $msi) { throw "no ViGEmBus MSI in the vgamepad sdist" }
+          $run = Start-Process msiexec -Wait -PassThru `
+            -ArgumentList "/i", "`"$($msi.FullName)`"", "/qn", "/norestart"
+          if ($run.ExitCode -ne 0) { throw "ViGEmBus install failed with $($run.ExitCode)" }
 
       - name: Install dependencies
         run: |
@@ -40,8 +65,17 @@ jobs:
   android:
     name: Android APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      # The mode bit is set in git (100755), so this changes nothing on a healthy
+      # checkout — it is here because the first tagged build died on
+      # "./gradlew: Permission denied" after the file was committed from Windows,
+      # and a whole release failing on a file mode is not worth the two seconds
+      # this saves.
+      - name: Make the wrapper executable
+        run: chmod +x android/gradlew
 
       - uses: actions/setup-java@v4
         with:
