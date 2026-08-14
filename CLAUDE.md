@@ -35,6 +35,7 @@ and needs neither a driver nor a phone — keep new logic on the pure side.
 server/nexus_server/
   protocol.py  wire format, pure          session.py  slots, rate limiting
   autostart.py HKCU Run key               tray.py     notification-area icon
+  shortcuts.py Start menu / desktop .lnk
   devices.py   VirtualPad + ViGEm + Fake  desktop.py  gated mouse/kbd, key binds
   buzz.py      Buzz mapping + ref HID     xinput.py   XInput slot accounting
   server.py    TCP, handshake, discovery  config.py   settings in %APPDATA%
@@ -136,8 +137,8 @@ and the pywebview UI thread polling `get_state()`.
 
 **Done** — protocol v2 with token pairing; Xbox/DS4/Buzz emulation; 8 players
 (`protocol.MAX_PLAYERS`; only 4 of them can be XInput-backed — see `xinput.py`);
-rumble; offline dashboard; key bindings; XInput capacity detection; 809 server
-tests + 192 Kotlin tests + hardware smoke test.
+rumble; offline dashboard; key bindings; XInput capacity detection; 831 server
+tests + 200 Kotlin tests + hardware smoke test.
 
 **Done, continued** — central configuration (`PROTOCOL.md` §10): live pad preview
 on every player card, drag-and-drop designer, controller-type switch from the PC,
@@ -206,6 +207,37 @@ which answers `primary_ip()` there. The firewall check reads the bound address,
 and `network_category_for("0.0.0.0")` answering None lands on the cautious
 "public" branch by itself, which is right: the listener really is on every
 network, including the ones the private-profile rule does not cover.
+
+`shortcuts.py` puts a `.lnk` in the Start menu and on the desktop, through
+`WScript.Shell` (PowerShell, no new dependency). The Start-menu one is not
+decoration: it is what makes Windows Search find a downloaded `.exe`, and what
+"Pin to Start" needs to pin. Same two rules as autostart — the file system *is*
+the state, and identity is the program a shortcut starts, so another copy's
+`.lnk` is neither reported as ours nor deleted by our switch. The desktop folder
+is **asked of Windows** (`GetFolderPath('Desktop')`), never assumed to be
+`~/Desktop`: OneDrive moves it and localises the name (`…\OneDrive\Pulpit` on
+this machine). Every call there is a PowerShell process, so both places are
+answered in one trip and the folder is looked up once per run.
+
+**Cursor movement injects a relative `SendInput`, not a `SetCursorPos`.**
+pynput's relative move is read-modify-write of the global cursor position, a
+hundred times a second, from a socket thread: it reads a position the last write
+has not landed in yet — the pointer snaps back over ground it covered — and it
+fights the mouse on the desk. `desktop.relative_mover()` builds the ctypes call
+once; `ULONG_PTR` must be pointer-sized or the struct is mis-sized and every
+event is rejected silently. `ERROR_ACCESS_DENIED` from it is **not** a broken
+backend: UIPI refuses injected input while the focused window belongs to a
+program running as administrator, and it starts working again when that window
+loses focus — so it falls back for that message only, and says so at most every
+30 seconds. Movement itself is chunked on the phone (`DeltaAccumulator`): a
+flick is more than one signed byte, and the whole distance has to leave in one
+call, because if the finger stops there is no next pointer event to carry the
+rest — it would ride out at the start of the next gesture instead.
+
+Tilt yields to the finger. Both reach the same cursor in trackpad mode, and
+holding a phone to swipe on it tilts the phone, so gyro steering was adding
+drift to every stroke; `GYRO_YIELD_SECONDS` after any MOUSE movement the gyro
+half of `_apply_mouse_mode` stands down and re-latches its centre afterwards.
 
 Closing the window hides it to the tray instead of quitting, unless the setting
 says otherwise or the icon did not start — `tray.decide_close()` is the whole

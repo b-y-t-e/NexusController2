@@ -131,6 +131,17 @@
           <input type="checkbox" id="tray-toggle" checked>
           <span id="tray-label">Closing the window keeps it running in the tray</span>
         </label>
+        <!-- A downloaded .exe has no installer, so it is reachable only from the
+             folder the browser dropped it in. The Start-menu entry is what makes
+             Windows Search find it, and what "Pin to Start" needs to pin. -->
+        <label class="switch">
+          <input type="checkbox" id="start-menu-toggle">
+          <span id="start-menu-label">Add to the Start menu</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" id="desktop-shortcut-toggle">
+          <span id="desktop-shortcut-label">Put a shortcut on the desktop</span>
+        </label>
         <!-- The only thing here that talks to anything outside the LAN, so it is
              a visible switch rather than a hidden default. -->
         <label class="switch">

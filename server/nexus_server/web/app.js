@@ -490,6 +490,19 @@ function wire() {
       refreshAutostart();
     });
   });
+  Object.entries(SHORTCUT_PLACES).forEach(([place, [box]]) => {
+    $(box).addEventListener('change', (event) => {
+      shortcutErrors[place] = null;
+      api().set_shortcut(place, event.target.checked)
+        .then((status) => applyShortcuts(status, place))
+        .catch((error) => {
+          console.warn('could not change a shortcut:', error);
+          shortcutErrors[place] = String(error);
+          refreshShortcuts();
+        });
+    });
+  });
+
   $('tray-toggle').addEventListener('change', (event) => {
     // Same shape as the autostart switch: a rejected call must not leave the box
     // showing a setting the app never took.
@@ -777,6 +790,41 @@ function refreshAutostart() {
   });
 }
 
+/** The two shortcut switches, and why one of them could not be changed.
+ *
+ * Same shape as the autostart pair above and for the same reasons: the file
+ * system is the state, so this is read back rather than remembered, and a
+ * refusal is kept until the user tries again — the refresh below carries no
+ * error of its own and would otherwise wipe the reason within seconds. */
+const SHORTCUT_PLACES = {
+  start_menu: ['start-menu-toggle', 'start-menu-label', 'Add to the Start menu'],
+  desktop: ['desktop-shortcut-toggle', 'desktop-shortcut-label', 'Put a shortcut on the desktop'],
+};
+/** Per place, not one for both: the Start menu can be locked down by policy
+ *  while the desktop is fine, and a refusal that annotates the switch the user
+ *  did not touch is a bug report waiting to happen. */
+const shortcutErrors = {};
+
+function applyShortcuts(status, failedPlace) {
+  if (failedPlace) shortcutErrors[failedPlace] = status.error || null;
+  Object.entries(SHORTCUT_PLACES).forEach(([place, [box, label, text]]) => {
+    syncCheckbox($(box), status[place]);
+    $(box).disabled = !status.supported;
+    const failure = shortcutErrors[place];
+    $(label).textContent = failure
+      ? text + ' — could not change it: ' + failure
+      : (status.supported ? text : text + ' — ' + status.reason);
+    $(label).classList.toggle('warn', !!failure);
+  });
+  return status;
+}
+
+function refreshShortcuts() {
+  return api().shortcut_status().then(applyShortcuts).catch((error) => {
+    console.warn('shortcut state unavailable:', error);
+  });
+}
+
 function refreshWindowState() {
   return api().window_state().then((state) => {
     syncCheckbox($('tray-toggle'), state.close_to_tray && state.tray_running);
@@ -878,6 +926,7 @@ window.addEventListener('pywebviewready', () => {
   refreshUpdate();
   refreshAutostart();
   refreshWindowState();
+  refreshShortcuts();
   setInterval(poll, POLL_MS);
   setInterval(refreshUpdate, UPDATE_POLL_MS);
   // Slowest of the three, because these two are the least likely to change and
@@ -890,5 +939,6 @@ window.addEventListener('pywebviewready', () => {
   setInterval(() => {
     refreshAutostart();
     refreshWindowState();
+    refreshShortcuts();
   }, SETTINGS_POLL_MS);
 });

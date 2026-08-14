@@ -62,6 +62,10 @@ REJECT_DRAIN_SECONDS = 1.0
 #: 4 ms, so a frantic thumb peaks near 250 frames/s and a still pad sends four.
 #: This only catches floods.
 INPUT_RATE_LIMIT = 1000.0
+#: How long tilt keeps out of the way of a finger on the trackpad.
+#: Long enough to cover the gap between strokes, short enough that putting the
+#: phone down and steering by tilt still feels immediate.
+GYRO_YIELD_SECONDS = 0.4
 
 LogSink = Callable[[str], None]
 
@@ -627,6 +631,10 @@ class ControllerServer:
 
             elif opcode == ClientOpcode.MOUSE:
                 delta = MouseDelta.decode(reader.read(3))
+                if delta.dx or delta.dy:
+                    # Movement only: the button field alone arrives on every
+                    # press and release, and a click should not stop the tilt.
+                    session.last_touch_move = time.monotonic()
                 self._move_cursor(session, delta.dx, delta.dy, touch=delta.buttons)
 
             elif opcode == ClientOpcode.SCROLL:
@@ -753,7 +761,14 @@ class ControllerServer:
         # moment the sensor was switched back on mid-session: the first real
         # reading was then a huge distance from a centre of (0, 0). The buttons
         # below are unaffected — a trigger is a trigger either way.
-        if state.gyro_valid:
+        # And not while a finger is doing it. Both streams reach the same cursor
+        # in trackpad mode, and tilt is unavoidable while somebody holds a phone
+        # to swipe on it — so the pad's own drift was added to every movement of
+        # the finger, and the cursor wandered off between strokes. The finger is
+        # the one the user is aiming with, so it wins, and the tilt centre is
+        # re-latched from wherever the phone ends up.
+        touching = time.monotonic() - session.last_touch_move < GYRO_YIELD_SECONDS
+        if state.gyro_valid and not touching:
             if session.gyro_centre is None:
                 session.gyro_centre = (state.roll, state.pitch)
             dx, dy = gyro_to_mouse(state.roll, state.pitch, *session.gyro_centre)

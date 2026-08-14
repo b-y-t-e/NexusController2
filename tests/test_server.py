@@ -614,6 +614,44 @@ class TestDesktopControl:
             pad = pad_for(server, client.slot)
             assert pad.state.lx == 0.0
 
+    def test_a_finger_on_the_trackpad_stops_the_tilt_fighting_it(
+        self, server, desktop_backend
+    ):
+        """Both streams reach one cursor in trackpad mode.
+
+        Tilt is unavoidable while somebody holds a phone to swipe on it, so the
+        pad's drift was being added to every stroke of the finger and the cursor
+        wandered off between them. The finger is what the user is aiming with.
+        """
+        server.desktop.enabled = True
+        gyro = int(InputFlag.MOUSE_MODE | InputFlag.GYRO_VALID)
+        with Client(server).connect() as client:
+            client.send_input(roll=0, pitch=0, flags=gyro)      # latch the centre
+            client.send_raw(bytes([P.ClientOpcode.MOUSE, 5, 0, 0]))
+            wait_for(lambda: (5, 0) in desktop_backend.moves)
+            before = len(desktop_backend.moves)
+
+            # Well outside the deadzone: without the rule this moves the cursor.
+            for _ in range(5):
+                client.send_input(roll=8000, pitch=0, flags=gyro)
+            wait_for(lambda: len(desktop_backend.moves) > before)
+            assert all(
+                (dx, dy) == (0, 0) for dx, dy in desktop_backend.moves[before:]
+            ), "the tilt moved the cursor while the finger was on the glass"
+
+    def test_and_the_tilt_takes_over_again_once_the_finger_is_gone(
+        self, server, desktop_backend, monkeypatch
+    ):
+        server.desktop.enabled = True
+        gyro = int(InputFlag.MOUSE_MODE | InputFlag.GYRO_VALID)
+        monkeypatch.setattr("nexus_server.server.GYRO_YIELD_SECONDS", 0.0)
+        with Client(server).connect() as client:
+            client.send_input(roll=0, pitch=0, flags=gyro)
+            client.send_raw(bytes([P.ClientOpcode.MOUSE, 5, 0, 0]))
+            wait_for(lambda: (5, 0) in desktop_backend.moves)
+            client.send_input(roll=8000, pitch=0, flags=gyro)
+            wait_for(lambda: any(dx > 0 for dx, _ in desktop_backend.moves[1:]))
+
     def test_key_bindings_fire_edges_and_mask_the_pad(self, server, desktop_backend):
         server.settings.key_bindings = {"0": {"a": "space"}}
         server.desktop.enabled = True

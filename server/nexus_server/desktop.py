@@ -11,13 +11,23 @@ from __future__ import annotations
 
 import abc
 import logging
+import os
 import threading
+import time
 from dataclasses import dataclass
 from typing import Iterable
 
 from .protocol import Button, DPad, MouseDelta, ScrollDelta
 
 log = logging.getLogger(__name__)
+
+#: What Windows returns when UIPI refuses injected input — see
+#: :meth:`PynputDesktop._report_blocked`. Not a failure of ours, and not
+#: permanent: it lasts exactly as long as the elevated window keeps focus.
+ACCESS_DENIED = 5
+#: How often that is worth saying. It happens once per message otherwise, and
+#: messages arrive a hundred times a second.
+BLOCKED_REPORT_SECONDS = 30.0
 
 
 class DesktopBackend(abc.ABC):
@@ -82,6 +92,72 @@ class FakeDesktop(DesktopBackend):
         self.keys = {k: False for k in self.keys}
 
 
+def relative_mover():
+    """A function that nudges the cursor by (dx, dy), or ``None`` off Windows.
+
+    Why this exists at all: ``pynput``'s relative move is
+    ``position = position + (dx, dy)`` — a ``GetCursorPos`` followed by a
+    ``SetCursorPos``. Read-modify-write of a value the whole system writes to,
+    a hundred times a second, from a socket thread. Two ways that shows up as a
+    cursor that jumps:
+
+    * ``SetCursorPos`` is not synchronous with the input queue, so a burst of
+      messages can read a position the last write has not landed in yet. The
+      new absolute position is then computed from a stale base, and the pointer
+      snaps back over ground it had already covered.
+    * it fights the mouse on the desk. Nudge the real mouse while the phone is
+      moving the cursor and every message teleports the pointer back to where
+      *this* side thought it was.
+
+    ``SendInput`` with ``MOUSEEVENTF_MOVE`` is what a mouse driver does: a
+    relative event handed to the same queue as every other input, accumulated in
+    order by the OS, with nothing read back. It also picks up the pointer speed
+    and acceleration the user has set, which is what makes it feel like their
+    mouse rather than like a remote desktop.
+    """
+    if os.name != "nt":
+        return None
+    import ctypes  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+
+    # Pointer-sized, and it matters: on 64-bit a DWORD here mis-sizes the
+    # structure and SendInput rejects every event with no other symptom.
+    ULONG_PTR = wintypes.WPARAM
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ULONG_PTR),
+        ]
+
+    class _INPUTUNION(ctypes.Union):
+        _fields_ = [("mi", MOUSEINPUT)]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("union", _INPUTUNION)]
+
+    INPUT_MOUSE = 0
+    MOUSEEVENTF_MOVE = 0x0001
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
+    user32.SendInput.restype = wintypes.UINT
+
+    def move(dx: int, dy: int) -> None:
+        event = INPUT(
+            type=INPUT_MOUSE,
+            union=_INPUTUNION(mi=MOUSEINPUT(dx, dy, 0, MOUSEEVENTF_MOVE, 0, 0)),
+        )
+        if user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT)) != 1:
+            raise OSError(ctypes.get_last_error(), "SendInput refused a mouse move")
+
+    return move
+
+
 class PynputDesktop(DesktopBackend):
     """Real input injection via ``pynput``."""
 
@@ -99,10 +175,41 @@ class PynputDesktop(DesktopBackend):
         }
         self._held_mouse: set[str] = set()
         self._held_keys: set[str] = set()
+        #: Windows only; see :func:`relative_mover`. None means pynput's own way.
+        self._relative_move = relative_mover()
+        self._blocked_reported = 0.0
 
     def move(self, dx: int, dy: int) -> None:
-        if dx or dy:
-            self._mouse.move(dx, dy)
+        if not (dx or dy):
+            return
+        if self._relative_move is not None:
+            try:
+                self._relative_move(dx, dy)
+                return
+            except OSError as exc:
+                if getattr(exc, "winerror", None) == ACCESS_DENIED:
+                    # Not a broken backend: Windows refuses injected input while
+                    # the *focused* window belongs to a program running as
+                    # administrator (UIPI). It comes back the moment that window
+                    # loses focus, so this must not be a one-way switch — the
+                    # next message tries again, and only the message to the user
+                    # is rate-limited.
+                    self._report_blocked()
+                else:
+                    log.warning("falling back to pynput for cursor movement: %s", exc)
+                    self._relative_move = None
+        self._mouse.move(dx, dy)
+
+    def _report_blocked(self) -> None:
+        now = time.monotonic()
+        if now - self._blocked_reported < BLOCKED_REPORT_SECONDS:
+            return
+        self._blocked_reported = now
+        log.warning(
+            "Windows is refusing injected input: the window in front belongs to a "
+            "program running as administrator. Start Nexus Controller as "
+            "administrator too, or click the desktop first."
+        )
 
     def scroll(self, dx: int, dy: int) -> None:
         if dx or dy:

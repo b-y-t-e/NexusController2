@@ -80,6 +80,9 @@ class PlayerSession:
         #: trackpad, and the two arrive independently.
         self.touch_buttons = 0      # from MOUSE messages — the trackpad
         self.trigger_buttons = 0    # from mouse-mode INPUT frames — the triggers
+        #: When a finger last moved the cursor, so tilt can get out of its way.
+        #: See ``ControllerServer._apply_mouse_mode``.
+        self.last_touch_move = 0.0
 
         #: Serialises writes to :attr:`connection`. Rumble arrives on a ViGEm
         #: callback thread while PONG/LED go out from the reader thread; without
@@ -122,6 +125,7 @@ class PlayerSession:
         self.gyro_centre = None
         self.touch_buttons = 0
         self.trigger_buttons = 0
+        self.last_touch_move = 0.0
         self.config = None
         self.config_pending = False
 

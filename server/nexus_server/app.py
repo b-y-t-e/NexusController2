@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import __version__, autostart, tray, updates
+from . import __version__, autostart, shortcuts, tray, updates
 from .config import Settings, SettingsStore, generate_token
 from .desktop import DesktopControl, create_backend
 from .devices import DriverUnavailableError, FakeBackend, PadBackend, VGamepadBackend
@@ -893,6 +893,51 @@ class Api:
             self._append_log(f"Could not change the start-with-Windows setting: {exc}")
             return {**self.autostart_status(), "error": str(exc)}
         return self.autostart_status()
+
+    # -- shortcuts ----------------------------------------------------------
+
+    def shortcut_status(self) -> dict:
+        """Which shortcuts this build has, read from the file system every time.
+
+        Not from ``settings.json``, for the reason the autostart switch is not
+        either: a user who deletes the icon is not asking this app to go on
+        believing it is there.
+        """
+        exe = updates.running_executable()
+        supported = shortcuts.supported(exe)
+        answer = {
+            "supported": supported,
+            "reason": "" if supported else (
+                "Only the packaged .exe can make a shortcut — this is a source checkout"
+                if os.name == "nt" else "Windows only"
+            ),
+        }
+        # One trip to the shell for both places; see shortcuts.status().
+        answer.update(shortcuts.status(exe))
+        return answer
+
+    def set_shortcut(self, place: str, enabled: bool) -> dict:
+        """Create or remove one shortcut. Answers with the state that resulted."""
+        if place not in shortcuts.PLACES:
+            return {**self.shortcut_status(), "error": f"unknown place {place!r}"}
+        exe = updates.running_executable()
+        if not shortcuts.supported(exe):
+            return self.shortcut_status()
+        where = place.replace("_", " ")
+        try:
+            if enabled:
+                shortcuts.create(place, exe)
+                self._append_log(f"Shortcut added to the {where}")
+            else:
+                shortcuts.remove(place, exe)
+                self._append_log(f"Shortcut removed from the {where}")
+        except OSError as exc:
+            # A managed machine can refuse either folder. Nothing else in the app
+            # is affected, so this reports and carries on.
+            log.warning("could not change the %s shortcut: %s", place, exc)
+            self._append_log(f"Could not change the {where} shortcut: {exc}")
+            return {**self.shortcut_status(), "error": str(exc)}
+        return self.shortcut_status()
 
     def set_check_updates(self, enabled: bool) -> bool:
         self.settings.check_updates = bool(enabled)

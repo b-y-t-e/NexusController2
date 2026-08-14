@@ -163,6 +163,85 @@ class TestKeyBindingEngine:
         assert engine.update(int(Button.EAST), 0) == [("enter", True)]
 
 
+class TestCursorMovement:
+    """How the cursor is actually nudged, and what happens when Windows says no.
+
+    pynput's relative move is a GetCursorPos followed by a SetCursorPos — a
+    read-modify-write of a value the whole system writes to, from a socket
+    thread, a hundred times a second. It reads a position the last write has not
+    landed in yet and the pointer snaps back over ground it just covered; touch
+    the real mouse at the same time and every message teleports it back. A
+    relative SendInput event is what a mouse driver sends, and there is nothing
+    to read.
+    """
+
+    def _backend(self, monkeypatch, mover):
+        """A PynputDesktop with both ways of moving replaced by recorders."""
+        desktop_module = pytest.importorskip("nexus_server.desktop")
+        monkeypatch.setattr(desktop_module, "relative_mover", lambda: mover)
+
+        class FakeMouse:
+            def __init__(self):
+                self.moves = []
+
+            def move(self, dx, dy):
+                self.moves.append((dx, dy))
+
+        backend = object.__new__(desktop_module.PynputDesktop)
+        backend._mouse = FakeMouse()
+        backend._relative_move = desktop_module.relative_mover()
+        backend._blocked_reported = 0.0
+        return backend, backend._mouse
+
+    def test_it_injects_a_relative_event_rather_than_setting_a_position(self, monkeypatch):
+        sent = []
+        backend, fallback = self._backend(monkeypatch, lambda dx, dy: sent.append((dx, dy)))
+        backend.move(7, -3)
+        assert sent == [(7, -3)]
+        assert fallback.moves == []
+
+    def test_nothing_is_sent_for_no_movement(self, monkeypatch):
+        sent = []
+        backend, _ = self._backend(monkeypatch, lambda dx, dy: sent.append((dx, dy)))
+        backend.move(0, 0)
+        assert sent == []
+
+    def test_a_window_running_as_administrator_is_not_a_broken_backend(self, monkeypatch):
+        """UIPI refuses injected input while an elevated window has focus, and
+        stops refusing the moment it loses it — so this must keep trying rather
+        than giving up on the good path for the rest of the session."""
+        attempts = []
+
+        def refuses(dx, dy):
+            attempts.append((dx, dy))
+            raise OSError(5, "SendInput refused a mouse move", None, 5)
+
+        backend, fallback = self._backend(monkeypatch, refuses)
+        backend.move(1, 1)
+        backend.move(2, 2)
+        assert attempts == [(1, 1), (2, 2)], "it stopped trying after the first refusal"
+        assert fallback.moves == [(1, 1), (2, 2)], "and moved the cursor anyway"
+
+    def test_any_other_failure_switches_over_for_good(self, monkeypatch):
+        """A backend that cannot work at all is not worth a syscall per message."""
+        attempts = []
+
+        def broken(dx, dy):
+            attempts.append((dx, dy))
+            raise OSError(87, "invalid parameter", None, 87)
+
+        backend, fallback = self._backend(monkeypatch, broken)
+        backend.move(1, 1)
+        backend.move(2, 2)
+        assert attempts == [(1, 1)]
+        assert fallback.moves == [(1, 1), (2, 2)]
+
+    def test_without_the_windows_path_pynput_still_moves_it(self, monkeypatch):
+        backend, fallback = self._backend(monkeypatch, None)
+        backend.move(4, 5)
+        assert fallback.moves == [(4, 5)]
+
+
 class TestGyroToMouse:
     def test_inside_deadzone_produces_no_movement(self):
         assert gyro_to_mouse(100, 100, 0, 0) == (0, 0)

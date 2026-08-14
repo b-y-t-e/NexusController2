@@ -118,8 +118,8 @@ class NetworkController {
         // the message that presses it again — a selection interrupted by a
         // reconnect would come back with the button believed down on one side
         // and up on the other.
-        mouseAccX = 0f
-        mouseAccY = 0f
+        mouseAcc.reset()
+        scrollAcc.reset()
         lastMouseButtons = -1
         val id = generation.incrementAndGet()
         current?.close()
@@ -411,41 +411,38 @@ class NetworkController {
         conn.otherChannel.trySend(packet)
     }
 
-    private var mouseAccX = 0f
-    private var mouseAccY = 0f
+    private val mouseAcc = DeltaAccumulator()
     private var lastMouseButtons = -1
 
     fun sendMouse(dx: Float, dy: Float, left: Boolean, right: Boolean, sensitivity: Float = 1.0f) {
         val conn = current ?: return
-        mouseAccX += dx * sensitivity
-        mouseAccY += dy * sensitivity
-        val ix = mouseAccX.toInt()
-        val iy = mouseAccY.toInt()
         // The wire mask, built from the same two constants the trackpad and its
         // button bar use — PROTOCOL.md §MOUSE, bit0 = left, bit1 = right.
         val buttons = (if (left) MouseButton.LEFT.bit else 0) or
             (if (right) MouseButton.RIGHT.bit else 0)
-        if (ix != 0 || iy != 0 || buttons != lastMouseButtons) {
-            conn.otherChannel.trySend(Protocol.mouse(ix, iy, buttons))
-            mouseAccX -= ix
-            mouseAccY -= iy
-            lastMouseButtons = buttons
+        // However many messages the movement takes — see DeltaAccumulator. A
+        // press or release still goes out on its own when nothing moved, because
+        // the button field is absolute and the PC is holding what it last heard.
+        val steps = mouseAcc.add(dx * sensitivity, dy * sensitivity)
+        if (steps.isEmpty()) {
+            if (buttons != lastMouseButtons) {
+                conn.otherChannel.trySend(Protocol.mouse(0, 0, buttons))
+                lastMouseButtons = buttons
+            }
+            return
         }
+        for ((ix, iy) in steps) {
+            conn.otherChannel.trySend(Protocol.mouse(ix, iy, buttons))
+        }
+        lastMouseButtons = buttons
     }
 
-    private var scrollAccX = 0f
-    private var scrollAccY = 0f
+    private val scrollAcc = DeltaAccumulator()
 
     fun sendScroll(dx: Float, dy: Float, sensitivity: Float = 1.0f) {
         val conn = current ?: return
-        scrollAccX += dx * sensitivity
-        scrollAccY += dy * sensitivity
-        val ix = scrollAccX.toInt()
-        val iy = scrollAccY.toInt()
-        if (ix != 0 || iy != 0) {
+        for ((ix, iy) in scrollAcc.add(dx * sensitivity, dy * sensitivity)) {
             conn.otherChannel.trySend(Protocol.scroll(ix, iy))
-            scrollAccX -= ix
-            scrollAccY -= iy
         }
     }
 
