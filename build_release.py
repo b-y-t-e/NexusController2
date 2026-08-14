@@ -252,15 +252,24 @@ def apksigner() -> Path:
 #: further signer — so a loose "contains a digest" match reads whichever comes
 #: first and calls it the certificate.
 #:
-#: The optional range is the shape that broke the first tagged build. When an
-#: APK's signers are not the same across every API level it supports, apksigner
-#: prints "Signer (minSdkVersion=21, maxSdkVersion=23) #1 certificate …" instead
-#: of a bare "Signer #1 certificate …" — which the same tool, on the same APK,
-#: does not do on a machine where the ranges agree. A release must not turn on
-#: which of the two a runner happens to produce.
+#: Three shapes, because apksigner has printed all three at us on the same APK:
+#:
+#: * ``Signer #1 certificate SHA-256 digest: …`` — the plain one;
+#: * ``Signer (minSdkVersion=21, maxSdkVersion=23) #1 certificate …`` — when the
+#:   signers are not identical across every API level the APK supports;
+#: * ``V3.0 Signer: certificate SHA-256 digest: …`` — per signature scheme,
+#:   which is what the build-tools on the GitHub runner print and the ones on
+#:   this machine do not.
+#:
+#: The last of those failed a release with the APK correctly signed all along, so
+#: this is deliberately generous about the prefix and exact about the rest: the
+#: line has to be a *certificate* digest (never the public key's, which is
+#: printed for every signer too) and, where the tool numbers the signers, the
+#: first one.
 SIGNER_DIGEST = re.compile(
-    r"^Signer\s*(?:\(min[Ss]dk[Vv]ersion=\d+(?:,\s*max[Ss]dk[Vv]ersion=\d+)?\)\s*)?"
-    r"#1 certificate SHA-256 digest:\s*([0-9a-fA-F]{64})\s*$",
+    r"^(?:Signer\s*(?:\(min[Ss]dk[Vv]ersion=\d+(?:,\s*max[Ss]dk[Vv]ersion=\d+)?\)\s*)?#1"
+    r"|V\d+(?:\.\d+)?\s+Signer:)"
+    r"\s*certificate SHA-256 digest:\s*([0-9a-fA-F]{64})\s*$",
     re.MULTILINE,
 )
 
@@ -299,12 +308,14 @@ def certificate_of(apk: Path, tool: Path | None = None) -> str:
             + (" / ".join(said[:5]) if said else "nothing at all")
         )
     if len(digests) > 1:
-        # Signer #1 under two API ranges is still one signer, so this means the
-        # ranges are signed by different keys — half the phones would take an
-        # update the other half refuse.
+        # One signer described once per range, or once per scheme, is still one
+        # key: two different answers mean the phones would not agree about who
+        # signed this, and half of them would refuse an update the rest took.
+        # A deliberate key rotation looks like this too, and would need a
+        # decision here rather than a silent pick of whichever came first.
         raise StepFailed(
-            f"{apk.name} is signed by more than one certificate across API "
-            f"levels: {', '.join(sorted(digests))}"
+            f"{apk.name} is signed by more than one certificate: "
+            f"{', '.join(sorted(digests))}"
         )
     return digests.pop()
 

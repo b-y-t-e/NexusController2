@@ -186,6 +186,19 @@ class TestReadingApksigner:
         ))
         assert br.certificate_of(tmp_path / "x.apk", tool) == self.CERT
 
+    def test_the_form_with_one_block_per_signature_scheme(self, tmp_path, monkeypatch):
+        """What the runner's build-tools print, and this machine's do not — the
+        difference that failed a release with the APK correctly signed."""
+        tool = self._tool(monkeypatch, (
+            "Verifies\n"
+            "Verified using v1 scheme (JAR signing): true\n"
+            f"V2 Signer: certificate SHA-256 digest: {self.CERT}\n"
+            f"V3.0 Signer: certificate DN: CN=Nexus Controller\n"
+            f"V3.0 Signer: certificate SHA-256 digest: {self.CERT}\n"
+            f"V3.0 Signer: public key SHA-256 digest: {self.OTHER}\n"
+        ))
+        assert br.certificate_of(tmp_path / "x.apk", tool) == self.CERT
+
     def test_two_keys_across_ranges_is_refused(self, tmp_path, monkeypatch):
         """Half the phones would take the update and the other half refuse it."""
         tool = self._tool(monkeypatch, (
