@@ -202,5 +202,6 @@
     <string name="update_downloading">DOWNLOADING %1$d%%</string>
     <string name="update_installing">INSTALLING…</string>
     <string name="update_up_to_date">This is the latest version.</string>
+    <string name="update_installed">The update is installed.</string>
     <string name="update_needs_permission">Android needs your permission to install apps from Nexus Controller. Tap to open that setting, then come back.</string>
 </resources>

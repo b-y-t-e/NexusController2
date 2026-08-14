@@ -59,6 +59,28 @@ class UpdateCheckTest {
     }
 
     @Test
+    fun `a number too big for Int is refused, not silently something else`() {
+        """Python's int has no ceiling, so without a shared cap "9999999999.0.0"
+        would be a version there and null here — and the two sides compare."""
+        assertNull(UpdateCheck.parseVersion("9999999999.0.0"))
+        assertNull(UpdateCheck.parseVersion("1.2.1234567890"))
+        // The number itself, which tests/test_client_compat.py asserts too — a
+        // change on one side alone makes a version that exists for one of them.
+        assertEquals(9, UpdateCheck.MAX_VERSION_DIGITS)
+        assertEquals(Triple(999999999, 0, 0), UpdateCheck.parseVersion("999999999.0.0"))
+    }
+
+    @Test
+    fun `digits means 0 to 9, not every digit Unicode knows`() {
+        """Char.isDigit() is true for the Arabic-Indic numerals and toIntOrNull()
+        reads them, so "2.٣" would have compared as a version. The Python side
+        has the mirror image of this — isdigit() says yes to "²" and int() then
+        raises — and both now spell the range out."""
+        assertNull(UpdateCheck.parseVersion("2.٣"))
+        assertNull(UpdateCheck.parseVersion("٢.1.0"))
+    }
+
+    @Test
     fun `compares numerically and not as text`() {
         assertTrue(UpdateCheck.isNewer("2.9.0", "2.10.0"))
         assertFalse(UpdateCheck.isNewer("2.10.0", "2.9.0"))

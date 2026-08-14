@@ -7,8 +7,10 @@ import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -37,6 +39,20 @@ sealed class UpdateStatus {
     data class Downloading(val percent: Int) : UpdateStatus()
     /** Handed to the system installer; the confirmation dialog is up. */
     object Installing : UpdateStatus()
+
+    /**
+     * The system says it went in. Its own outcome, not [Idle]: an outcome is
+     * kept for a screen that comes back, and "idle" kept that way is a screen
+     * that says nothing about what just happened and skips the version check
+     * because it thinks something already answered.
+     *
+     * Unlike the PC, this is *not* a terminal state — [isActionable] still lets
+     * the button be pressed. There, installing again would move the new build
+     * aside as if it were the old one and destroy the only copy of what came
+     * before; here the package installer simply puts the same APK over itself,
+     * and the process is normally replaced before any of it can happen anyway.
+     */
+    object Installed : UpdateStatus()
     /** Reported to the user; never thrown away silently. */
     data class Failed(val message: String) : UpdateStatus()
 }
@@ -283,7 +299,7 @@ class InstallResultReceiver : BroadcastReceiver() {
                 runCatching { context.startActivity(confirm) }
                     .onFailure { report(UpdateStatus.Failed("Could not open the install dialog")) }
             }
-            PackageInstaller.STATUS_SUCCESS -> report(UpdateStatus.Idle)
+            PackageInstaller.STATUS_SUCCESS -> report(UpdateStatus.Installed)
             else -> {
                 val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
                 Log.w("NexusUpdater", "install failed: status=$status message=$message")
@@ -306,21 +322,93 @@ class InstallResultReceiver : BroadcastReceiver() {
         else -> message
     }
 
-    private fun report(status: UpdateStatus) {
-        listener?.invoke(status)
-    }
-
     companion object {
         const val ACTION = "com.nexuscontroller.pad.INSTALL_RESULT"
 
         /**
-         * Set by whatever screen started the install, so the outcome can be shown
-         * there. A field rather than anything cleverer because the receiver is
-         * created by the system, gets no constructor arguments, and this process
-         * is alive throughout — the confirmation dialog belongs to the installer,
-         * not to us, so nothing here is ever restored from a cold start.
+         * The screen currently waiting for the outcome, set through [attach].
+         *
+         * Static state rather than anything cleverer because the receiver is
+         * created by the system and gets no constructor arguments. What it is
+         * not, any more, is the whole story: a screen can be away when the
+         * answer comes, so the answer waits in [pending] rather than being
+         * addressed to whoever happens to be here.
          */
-        @Volatile
-        var listener: ((UpdateStatus) -> Unit)? = null
+        private var listener: ((UpdateStatus) -> Unit)? = null
+
+        /**
+         * The last outcome nobody was listening for, kept until somebody is.
+         *
+         * The install dialog belongs to the system, and while it is up this
+         * activity is stopped — rotate the phone there, or let the system
+         * recreate the activity for any of its own reasons, and the screen that
+         * registered is gone for a moment. A result arriving in that moment used
+         * to be dropped, leaving the About screen saying "Installing…" for ever
+         * with no way back except leaving the screen. Delivered once: whoever
+         * takes it clears it.
+         */
+        private var pending: UpdateStatus? = null
+        private var pendingAt = 0L
+
+        /**
+         * How long an undelivered outcome is still worth showing.
+         *
+         * It is the answer to something the user did seconds ago, not a message.
+         * Kept for ever it becomes one: leave the About screen while the dialog
+         * is up, come back in the evening, and the first thing the screen says is
+         * "Update cancelled" — about an afternoon nobody remembers — while the
+         * version check that would have said something true is held back for it.
+         */
+        private const val PENDING_TTL_MS = 60_000L
+
+        /**
+         * Milliseconds since boot, *including* the time the phone spent asleep.
+         *
+         * Not nanoTime(): it stops in deep sleep, which is exactly the scenario
+         * the cap above exists for — the phone in a pocket all evening comes
+         * back with a clock that has barely moved and an outcome that is
+         * therefore still "fresh". Tests replace this.
+         */
+        @VisibleForTesting
+        internal var now: () -> Long = { SystemClock.elapsedRealtime() }
+
+        /** Listen for the outcome, receiving one that arrived just before. */
+        fun attach(listener: (UpdateStatus) -> Unit) {
+            // Decided under the lock, delivered outside it. Nothing this
+            // listener does takes the lock today, but it is a callback into
+            // Compose and the rule everywhere else here is that no lock is held
+            // while calling out of the class that owns it.
+            val replay = claim(listener)
+            if (replay != null) listener(replay)
+        }
+
+        @Synchronized
+        private fun claim(listener: (UpdateStatus) -> Unit): UpdateStatus? {
+            this.listener = listener
+            val waiting = pending
+            pending = null
+            return if (waiting != null && now() - pendingAt < PENDING_TTL_MS) waiting else null
+        }
+
+        @Synchronized
+        fun detach(listener: (UpdateStatus) -> Unit) {
+            // Only if it is still ours: a screen being disposed after its
+            // replacement has already registered must not silence the new one.
+            if (this.listener === listener) this.listener = null
+        }
+
+        /** Hand an outcome to the screen waiting for it, or keep it until one is. */
+        internal fun report(status: UpdateStatus) = waiting(status)?.invoke(status)
+
+        /** Take the listener to deliver to, or park the outcome for the next one. */
+        @Synchronized
+        private fun waiting(status: UpdateStatus): ((UpdateStatus) -> Unit)? {
+            val current = listener
+            if (current == null) {
+                pending = status
+                pendingAt = now()
+            }
+            return current
+        }
     }
 }

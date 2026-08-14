@@ -43,6 +43,9 @@ object UpdateCheck {
     const val LEGACY_ASSET = "NexusController-legacy.apk"
     const val CHECKSUMS_ASSET = "SHA256SUMS.txt"
 
+    /** Digits allowed in one part of a version; the Python side agrees. */
+    const val MAX_VERSION_DIGITS = 9
+
     /** The APK that belongs to this build. See the note on flavours above. */
     fun assetFor(flavor: String): String =
         if (flavor.equals("legacy", ignoreCase = true)) LEGACY_ASSET else MODERN_ASSET
@@ -56,10 +59,21 @@ object UpdateCheck {
     fun parseVersion(text: String?): Triple<Int, Int, Int>? {
         if (text == null) return null
         val cleaned = text.trim().trimStart('v', 'V').substringBefore('-').substringBefore('+')
+        // split() never returns an empty list — "" splits to [""], which the
+        // digit check below rejects — so the only thing to refuse here is a
+        // fourth part.
         val parts = cleaned.split('.')
-        if (parts.isEmpty() || parts.size > 3) return null
+        if (parts.size > 3) return null
         val numbers = parts.map { part ->
-            if (part.isEmpty() || !part.all { it.isDigit() }) return null
+            // '0'..'9' and not isDigit(): the latter is true for every Unicode
+            // decimal digit, and toIntOrNull() duly reads "٣" as 3 — so a tag in
+            // Arabic-Indic numerals would compare as a version. The Python side
+            // spells the same range out for the mirror-image reason.
+            // The length cap is the other half of the same agreement: Python's
+            // int has no ceiling, so without it "9999999999.0.0" is a version
+            // there and null here. Nine digits is more than any real one needs.
+            if (part.isEmpty() || part.length > MAX_VERSION_DIGITS) return null
+            if (!part.all { it in '0'..'9' }) return null
             part.toIntOrNull() ?: return null
         }
         return Triple(
@@ -149,5 +163,59 @@ object UpdateCheck {
     fun matchesChecksum(digest: String, name: String, checksums: String?): Boolean {
         val expected = parseChecksums(checksums)[name] ?: return false
         return digest.equals(expected, ignoreCase = true)
+    }
+}
+
+
+/**
+ * Who is allowed to write the status the update screen is showing.
+ *
+ * Two things produce one. The version check and the download report progress and
+ * results by returning from a suspending call; the *installer* reports through a
+ * broadcast, because the confirmation dialog belongs to the system. The second
+ * one routinely arrives first — `downloadAndInstall` returns `Installing` as
+ * soon as the session is committed, and the user's answer to the dialog, most
+ * often "no", comes back while that line is still on its way. Writing it blindly
+ * put "Installing…" back over "Update cancelled" with nothing left to change it,
+ * and the same thing happened after a rotation: the outcome was replayed to the
+ * new screen and a routine version check wrote "you are up to date" over it —
+ * which is not even true until the app restarts.
+ *
+ * So: an outcome from the installer wins and *keeps* winning, until the user
+ * asks for something new by hand. Not Compose-aware on purpose — this is the
+ * rule, and it is tested as one.
+ *
+ * **Its life is one composition.** It is held by `remember`, not
+ * `rememberSaveable`, and it guards a status that is not saveable either: a
+ * configuration change takes the whole screen back to `Idle` and runs a fresh
+ * check, which is the right answer for everything except an outcome the user was
+ * reading at that moment. That case is covered from the other end —
+ * [InstallResultReceiver] replays an undelivered outcome to the next screen for
+ * a minute — and closing the remaining gap properly means a ViewModel holding
+ * the status, not a saveable flag guarding one that is already gone.
+ */
+class UpdateScreenState {
+    /**
+     * Volatile because the two sides are on different threads: the broadcast and
+     * the taps arrive on the main thread, while `downloadAndInstall` runs its
+     * progress callback from inside `withContext(Dispatchers.IO)`. Without it
+     * the worker may go on reading a stale `false` for as long as the JVM likes,
+     * which is precisely the window this class exists to close.
+     */
+    @Volatile
+    var settled: Boolean = false
+        private set
+
+    /** An outcome from the system installer. Always shown, and it sticks. */
+    fun fromInstaller() {
+        settled = true
+    }
+
+    /** A result from a check or a download. Shown unless an outcome is standing. */
+    fun fromWork(): Boolean = !settled
+
+    /** The user pressed something: whatever is on screen is being replaced on purpose. */
+    fun userAsked() {
+        settled = false
     }
 }

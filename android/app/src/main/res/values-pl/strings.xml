@@ -183,5 +183,6 @@
     <string name="update_downloading">POBIERANIE %1$d%%</string>
     <string name="update_installing">INSTALOWANIE…</string>
     <string name="update_up_to_date">To najnowsza wersja.</string>
+    <string name="update_installed">Aktualizacja zainstalowana.</string>
     <string name="update_needs_permission">Android potrzebuje zgody na instalowanie aplikacji z Nexus Controller. Dotknij, aby otworzyć to ustawienie, potem wróć tutaj.</string>
 </resources>

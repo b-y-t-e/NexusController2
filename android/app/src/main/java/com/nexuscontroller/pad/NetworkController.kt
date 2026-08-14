@@ -421,7 +421,10 @@ class NetworkController {
         mouseAccY += dy * sensitivity
         val ix = mouseAccX.toInt()
         val iy = mouseAccY.toInt()
-        val buttons = (if (left) 1 else 0) or (if (right) 2 else 0)
+        // The wire mask, built from the same two constants the trackpad and its
+        // button bar use — PROTOCOL.md §MOUSE, bit0 = left, bit1 = right.
+        val buttons = (if (left) MouseButton.LEFT.bit else 0) or
+            (if (right) MouseButton.RIGHT.bit else 0)
         if (ix != 0 || iy != 0 || buttons != lastMouseButtons) {
             conn.otherChannel.trySend(Protocol.mouse(ix, iy, buttons))
             mouseAccX -= ix

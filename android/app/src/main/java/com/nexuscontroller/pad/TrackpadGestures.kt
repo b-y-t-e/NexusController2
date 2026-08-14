@@ -1,7 +1,17 @@
 package com.nexuscontroller.pad
 
-/** The two buttons a gesture can resolve to. Middle is not reachable by touch. */
-enum class MouseButton { LEFT, RIGHT }
+/**
+ * The two buttons a gesture can resolve to. Middle is not reachable by touch.
+ *
+ * [bit] is its place in a [HeldButtons] mask — and on the wire: `MOUSE` carries
+ * bit0 = left, bit1 = right (PROTOCOL.md §MOUSE). Protocol.kt takes that mask as
+ * a number and names nothing in it, so this is the one place the two are
+ * written down, and they are written once each rather than in a branch.
+ */
+enum class MouseButton(val bit: Int) {
+    LEFT(1),
+    RIGHT(2)
+}
 
 /** What the trackpad decided a touch means. */
 sealed interface TrackpadAction {
@@ -36,24 +46,22 @@ class HeldButtons {
     private var byBar = 0
     private var byTap = 0
 
-    private fun bit(button: MouseButton) = if (button == MouseButton.LEFT) 1 else 2
-
     fun byGesture(button: MouseButton, down: Boolean) {
-        byGesture = if (down) byGesture or bit(button) else byGesture and bit(button).inv()
+        byGesture = if (down) byGesture or button.bit else byGesture and button.bit.inv()
     }
 
     fun byBar(button: MouseButton, down: Boolean) {
-        byBar = if (down) byBar or bit(button) else byBar and bit(button).inv()
+        byBar = if (down) byBar or button.bit else byBar and button.bit.inv()
     }
 
     fun byTap(button: MouseButton, down: Boolean) {
-        byTap = if (down) byTap or bit(button) else byTap and bit(button).inv()
+        byTap = if (down) byTap or button.bit else byTap and button.bit.inv()
     }
 
     /** Everything held, whoever is holding it. */
     val mask: Int get() = byGesture or byBar or byTap
 
-    fun isHeld(button: MouseButton): Boolean = mask and bit(button) != 0
+    fun isHeld(button: MouseButton): Boolean = mask and button.bit != 0
 
     /** Let go of everything, for a surface that is going away. */
     fun releaseAll() {

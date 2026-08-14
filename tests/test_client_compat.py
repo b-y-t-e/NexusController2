@@ -219,6 +219,14 @@ class TestOtherOpcodes:
         assert (delta.dx, delta.dy) == (-127, 127)
         assert delta.buttons & MouseDelta.LEFT and delta.buttons & MouseDelta.RIGHT
 
+    def test_the_button_bits_are_the_ones_the_phone_sets(self):
+        """`MouseButton.LEFT.bit` is 1 and `RIGHT.bit` is 2 in TrackpadGestures.kt,
+        asserted there against the same numbers. The trackpad, its button bar and
+        NetworkController all build the mask from that enum, so these two bits are
+        the whole agreement — and swapping them would silently swap the buttons on
+        a PC rather than fail anywhere."""
+        assert (MouseDelta.LEFT, MouseDelta.RIGHT) == (1, 2)
+
     def test_scroll(self):
         assert ScrollDelta.decode(body(SCROLL_VECTOR)) == ScrollDelta(-127, 3)
 
@@ -376,3 +384,50 @@ class TestConfigFramingAgreement:
         body = '{"n":"ąę"}'.encode("utf-8")
         framed = P.encode_set_config(body)
         assert struct.unpack(">H", framed[1:3])[0] == len(body) > len('{"n":"ąę"}')
+
+
+# --- version strings, which are not bytes but are just as shared -------------
+
+#: Exactly the cases `UpdateCheckTest.kt` asserts on. Not a wire format, but the
+#: same kind of agreement: both sides read a release tag and compare it against
+#: their own version, and a rule that holds on one side only means a phone and a
+#: PC disagreeing about whether an update exists. The two languages fail
+#: differently here — Python's `isdigit()` accepts "²" where `int()` does not,
+#: Kotlin's `toIntOrNull()` reads "٣" as 3 and gives up past 2^31 — so the shared
+#: rule is spelled out rather than inherited: 0-9 only, at most three parts, at
+#: most `MAX_VERSION_DIGITS` digits each.
+VERSION_VECTORS: tuple[tuple[str, tuple[int, int, int] | None], ...] = (
+    ("2.1.0", (2, 1, 0)),
+    ("v2.1.0", (2, 1, 0)),
+    ("2.1", (2, 1, 0)),
+    ("3", (3, 0, 0)),
+    ("2.1.0-legacy", (2, 1, 0)),
+    ("", None),
+    ("latest", None),
+    ("2.1.0.0", None),
+    ("2.x", None),
+    ("2.²", None),
+    ("٢.1.0", None),
+    ("2.٣", None),
+    ("9999999999.0.0", None),
+    ("1.2.1234567890", None),
+)
+
+
+class TestVersionRulesAgreement:
+    """The update check reads the same tag on both sides; it must read it the same."""
+
+    @pytest.mark.parametrize(("text", "expected"), VERSION_VECTORS)
+    def test_the_python_side_reads_what_the_kotlin_side_reads(self, text, expected):
+        from nexus_server import updates
+
+        assert updates.parse_version(text) == expected
+
+    def test_the_digit_cap_is_the_number_both_sides_carry(self):
+        """`UpdateCheck.MAX_VERSION_DIGITS` says 9 too; a change on one side alone
+        makes a version that exists for one of the two."""
+        from nexus_server import updates
+
+        assert updates.MAX_VERSION_DIGITS == 9
+        assert updates.parse_version("9" * 9 + ".0.0") == (999999999, 0, 0)
+        assert updates.parse_version("9" * 10 + ".0.0") is None

@@ -240,6 +240,27 @@ class HeldButtonsTest {
     }
 
     @Test
+    fun `the bits are the ones the wire carries`() {
+        """PROTOCOL.md §MOUSE: bit0 = left, bit1 = right. tests/test_client_compat.py
+        asserts the same two numbers on the server, because swapping them here
+        would swap the buttons on the PC without failing anywhere."""
+        assertEquals(1, MouseButton.LEFT.bit)
+        assertEquals(2, MouseButton.RIGHT.bit)
+    }
+
+    @Test
+    fun `the mask says which button is down, and the bar reads it the same way`() {
+        """The button bar draws its two keys from the mask, and did it with 1 and
+        2 written out again where nothing would have caught them drifting."""
+        val held = HeldButtons()
+        held.byBar(MouseButton.RIGHT, true)
+        assertEquals(0, held.mask and MouseButton.LEFT.bit)
+        assertTrue(held.mask and MouseButton.RIGHT.bit != 0)
+        held.byGesture(MouseButton.LEFT, true)
+        assertTrue(held.mask and MouseButton.LEFT.bit != 0)
+    }
+
+    @Test
     fun `releaseAll drops every source at once`() {
         """For a surface going away: whatever is holding a button, nobody is
         going to lift it afterwards."""

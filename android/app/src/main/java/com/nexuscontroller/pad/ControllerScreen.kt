@@ -875,8 +875,10 @@ private fun TrackpadSurface(
 
             if (showButtonBar) {
                 TrackpadButtonBar(
-                    heldLeft = heldMask and 1 != 0,
-                    heldRight = heldMask and 2 != 0,
+                    // From MouseButton, not from 1 and 2 written out again here:
+                    // the bar drew the wrong button the moment the two drifted.
+                    heldLeft = heldMask and MouseButton.LEFT.bit != 0,
+                    heldRight = heldMask and MouseButton.RIGHT.bit != 0,
                     onHold = { button, down ->
                         held.byBar(button, down)
                         send(0f, 0f)
