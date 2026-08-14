@@ -26,7 +26,10 @@ Pushing the tag is what makes GitHub build and publish the release; the local
     --skip-tests     pass --skip-tests to build_release.py
     --no-push        commit and tag, but stop before pushing
     --dry-run        print what would happen and change nothing
-    --yes            answer every prompt with yes (for a script; think first)
+    --yes            answer every prompt with yes (for a script; think first).
+                     One question it does not answer: a dirty tree stops the run
+                     rather than being committed by a script that was not shown
+                     what is in it.
 """
 
 from __future__ import annotations
@@ -268,7 +271,7 @@ def release_url(root: Path = ROOT) -> str | None:
 
 # --- prompts ----------------------------------------------------------------
 
-def ask(question: str, *, assume_yes: bool) -> bool:
+def ask(question: str, *, assume_yes: bool = False) -> bool:
     if assume_yes:
         log(f"{question} — yes (--yes)")
         return True
@@ -281,7 +284,7 @@ def ask(question: str, *, assume_yes: bool) -> bool:
     return answer in {"y", "yes", "t", "tak"}
 
 
-def ask_for_version(version: Version, *, assume_yes: bool) -> bool:
+def ask_for_version(version: Version, *, assume_yes: bool = False) -> bool:
     """The last gate, deliberately not a keystroke.
 
     Everything after this point is public: a pushed tag builds and publishes a
@@ -448,7 +451,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="print the plan and change nothing")
     parser.add_argument("--yes", action="store_true",
-                        help="do not ask anything (for scripts)")
+                        help="do not ask anything (for scripts); a dirty tree still stops the run")
     args = parser.parse_args(argv)
 
     #: Set as soon as either becomes true, because the interrupt handler below
@@ -474,6 +477,11 @@ def main(argv: list[str] | None = None) -> int:
 
         branch = current_branch()
         if branch != "main":
+            # --yes answers this one, and not the dirty-tree question below, on
+            # purpose. The branch is the caller's own choice, visible in the
+            # command they ran and in this line, and the worst it produces is a
+            # tag on a commit they picked — deletable. Saying yes to the other
+            # question commits content nobody has looked at, and publishes it.
             log(f"NOTE: on branch {branch}, not main")
             if not ask("Release from this branch anyway?", assume_yes=args.yes):
                 raise StepFailed("stopped — switch to main and run again")
@@ -486,14 +494,24 @@ def main(argv: list[str] | None = None) -> int:
                 log(f"  {line}")
             if len(dirty) > 20:
                 log(f"  … and {len(dirty) - 20} more")
-            # Not in a dry run. Asking would be a question about something that
-            # is not going to happen, and refusing before the plan is printed
-            # turned --dry-run on a dirty tree — much the commonest way to run it
-            # — into the one case that shows nothing at all.
-            if not args.dry_run:
-                include_dirty = ask(
-                    "Commit ALL of these together with the version bump?", assume_yes=args.yes
+            # Nothing below happens in a dry run: neither the refusal nor the
+            # question. Refusing before the plan is printed turned --dry-run on a
+            # dirty tree — much the commonest way to run it — into the one case
+            # that shows nothing at all.
+            if args.yes and not args.dry_run:
+                # --yes means "do not ask me", not "sweep whatever is lying
+                # around into the release". Answering this particular question
+                # with yes runs `git add -A`, so an unattended run would tag and
+                # publish a half-finished edit, a stray scratch file or a config
+                # someone was in the middle of — and the tag is public before
+                # anyone looks. The only safe unattended answer is to stop.
+                raise StepFailed(
+                    "the working tree is not clean and --yes will not commit changes it was "
+                    "not shown — commit or stash them first, or run without --yes to be asked"
                 )
+            if not args.dry_run:
+                # Always asked: --yes has already been turned away above.
+                include_dirty = ask("Commit ALL of these together with the version bump?")
                 if not include_dirty:
                     # Leaving them behind would tag a tree that differs from the
                     # one just built and tested, which is the point of the check.

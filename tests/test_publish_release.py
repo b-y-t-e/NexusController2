@@ -416,11 +416,35 @@ class TestDirtyTree:
         assert pr.main(["minor"]) == 1
         assert not git.ran("tag", "-a")
 
-    def test_yes_flag_answers_everything(self, repo, git, answers, no_build):
-        git.status = " M x.py\n"
+    def test_yes_flag_answers_everything_on_a_clean_tree(self, repo, git, answers, no_build):
         assert pr.main(["minor", "--yes"]) == 0
-        assert git.ran("add", "-A")
+        assert git.ran("add", "--", "pyproject.toml")
+        assert not git.ran("add", "-A")
         assert git.ran("push", "origin", "v2.1.0")
+
+    def test_yes_flag_will_not_commit_a_dirty_tree_it_was_not_shown(
+        self, repo, git, answers, no_build, capsys
+    ):
+        """--yes means "do not ask me", not "publish whatever is lying around".
+
+        Saying yes to this one question runs `git add -A`, so an unattended run
+        would tag and push a half-finished edit or a stray scratch file — and by
+        the time anyone looks, the tag is public and GitHub has built it.
+        """
+        git.status = " M x.py\n?? scratch.txt\n"
+        assert pr.main(["minor", "--yes"]) == 1
+        assert not git.ran("add", "-A")
+        assert not git.ran("tag", "-a")
+        assert pr.current_version(repo) == pr.Version(2, 0, 0)
+        assert "commit or stash" in capsys.readouterr().out
+
+    def test_a_dry_run_with_yes_on_a_dirty_tree_still_prints_the_plan(
+        self, repo, git, answers, no_build, capsys
+    ):
+        """Nothing is committed by a dry run, so there is nothing to refuse."""
+        git.status = " M x.py\n"
+        assert pr.main(["minor", "--yes", "--dry-run"]) == 0
+        assert "about to release 2.1.0" in capsys.readouterr().out
 
 
 class TestBranch:

@@ -114,13 +114,26 @@ jobs:
           import pathlib, sys
           import build_release
 
+          def fail(message):
+              # Workflow commands are only read on stdout — sys.exit(str) writes
+              # to stderr, where "::error::" is just text in the log and no
+              # annotation appears on the run. The step still fails either way;
+              # this is about the failure being visible without opening it.
+              #
+              # And a command ends at the newline, so a multi-line message would
+              # annotate its first line and print the rest as bare log text —
+              # which is the half that names the certificate that did not match.
+              text = str(message).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error::{text}", flush=True)
+              sys.exit(1)
+
           apks = sorted(pathlib.Path("staging").glob("*.apk"))
           if len(apks) != 2:
-              sys.exit(f"expected two staged APKs, found {[p.name for p in apks]}")
+              fail(f"expected two staged APKs, found {[p.name for p in apks]}")
           try:
               build_release.verify_signatures([(p, p.name) for p in apks])
           except build_release.StepFailed as exc:
-              sys.exit(f"::error::{exc}")
+              fail(exc)
           PY
 
       - uses: actions/upload-artifact@v4

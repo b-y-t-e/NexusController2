@@ -56,6 +56,9 @@ REQUIRED_MODULES = {
     "pytest": "requirements-dev.txt",
     "pytest_timeout": "requirements-dev.txt",   # pyproject passes --timeout
     "PyInstaller": "pyinstaller",
+    # Bundled into the .exe, so it has to be present at build time even though
+    # the app degrades gracefully without it at run time.
+    "pystray": "requirements.txt",
 }
 
 
