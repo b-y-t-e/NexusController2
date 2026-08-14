@@ -1187,6 +1187,46 @@ def run_headless(simulate: bool = False) -> int:
     return 0
 
 
+def selftest() -> int:
+    """Prove the packaged build can actually open a window, without opening one.
+
+    A frozen build carries pieces nothing in the source tree needs: the web
+    assets, and — the one that bit — the three native runtime folders pywebview
+    puts on ``PATH`` when it imports its WinForms backend. It asks for
+    ``win-arm64`` even on an x64 machine, so a bundle missing any of them fails
+    at *import*, before a single line of this app runs, with "Cannot find
+    win-arm64" in a dialog. Nothing in the suite can see that: the tests run from
+    the source tree, where those folders are simply there.
+
+    So the release runs the executable it just built and this is what it runs.
+    Importing the backend is the whole test — that is where the failure was —
+    and it needs no display, so it works on a build runner as well as here.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    try:
+        import webview  # noqa: PLC0415
+
+        # webview.initialize, not webview.guilib: the package keeps a *variable*
+        # of that name, set to None until a window is created, which shadows the
+        # module of the same name and answers None to everything asked of it.
+        #
+        # This is the call webview.start() makes first, and the one that imports
+        # the platform backend. It swallows ImportError on the way, so what it
+        # returns is checked rather than the fact that it returned.
+        chosen = webview.initialize()
+        if chosen is None:
+            raise RuntimeError("pywebview found no usable GUI backend in this build")
+        for asset in ("index.html", "app.js", "style.css"):
+            if not (WEB_DIR / asset).is_file():
+                raise FileNotFoundError(f"{asset} is missing from the bundle ({WEB_DIR})")
+    except Exception as exc:  # noqa: BLE001 - this is the report
+        log.error("selftest failed: %s: %s", type(exc).__name__, exc)
+        return 1
+    log.info("selftest ok — %s backend, assets in %s", getattr(chosen, "renderer", "?"), WEB_DIR)
+    log.info("webview %s", getattr(webview, "__version__", "unknown"))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nexus-controller", description=__doc__)
     parser.add_argument("--version", action="version", version=__version__)
@@ -1203,7 +1243,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--minimized", action="store_true", help="start in the notification area"
     )
+    # What the release runs against the executable it just built. See selftest().
+    parser.add_argument(
+        "--selftest",
+        action="store_true",
+        help="check that this build can open a window, then exit",
+    )
     args = parser.parse_args(argv)
+    if args.selftest:
+        return selftest()
     if args.headless:
         return run_headless(args.simulate)
     return run_gui(args.simulate, minimized=args.minimized)

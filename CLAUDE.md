@@ -137,7 +137,7 @@ and the pywebview UI thread polling `get_state()`.
 
 **Done** — protocol v2 with token pairing; Xbox/DS4/Buzz emulation; 8 players
 (`protocol.MAX_PLAYERS`; only 4 of them can be XInput-backed — see `xinput.py`);
-rumble; offline dashboard; key bindings; XInput capacity detection; 831 server
+rumble; offline dashboard; key bindings; XInput capacity detection; 832 server
 tests + 200 Kotlin tests + hardware smoke test.
 
 **Done, continued** — central configuration (`PROTOCOL.md` §10): live pad preview
@@ -218,6 +218,16 @@ is **asked of Windows** (`GetFolderPath('Desktop')`), never assumed to be
 `~/Desktop`: OneDrive moves it and localises the name (`…\OneDrive\Pulpit` on
 this machine). Every call there is a PowerShell process, so both places are
 answered in one trip and the folder is looked up once per run.
+
+**The release runs the `.exe` it just built** (`--selftest`: imports the GUI
+backend, checks the dashboard assets, exits — no window, so it works on a
+runner). Four releases shipped before a bundle that could not import its own
+backend was found *by a user*, from a crash dialog: pywebview puts three native
+runtime folders on `PATH` when it imports WinForms — `win-arm64` among them, on
+an x64 machine — and a bundle missing any of them dies with "Cannot find
+win-arm64" before a line of this app runs. Hence also `--collect-all webview`
+rather than trusting PyInstaller's hook. No test in either suite can see this:
+they run from the source tree, where those folders are simply there.
 
 **Cursor movement injects a relative `SendInput`, not a `SetCursorPos`.**
 pynput's relative move is read-modify-write of the global cursor position, a

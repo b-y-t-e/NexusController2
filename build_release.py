@@ -188,7 +188,36 @@ def build_exe(python: str, no_driver: bool) -> Path:
     produced = DIST / EXE_NAME
     if not produced.is_file():
         raise StepFailed(f"expected {produced} but it is not there")
+    # tools/build_exe.py already ran the executable once (see its selftest()).
+    # This runs it again from here because this script is also the one a person
+    # runs by hand with a .exe built earlier, and "it was checked at build time"
+    # is not something a release should have to take on trust.
+    verify_it_starts(produced)
     return produced
+
+
+def verify_it_starts(exe: Path) -> None:
+    """Run the built executable and require it to start.
+
+    Nothing in this project ever ran the artefact, and four releases went out
+    before a bundle that could not import its own GUI backend was noticed — by a
+    user, from a crash dialog. The suites cannot see that: they run from the
+    source tree, where the pieces PyInstaller has to be told about are present
+    anyway. ``--selftest`` opens no window, so this is as true on a build runner
+    as it is here.
+    """
+    try:
+        result = subprocess.run(
+            [str(exe), "--selftest"], capture_output=True, text=True, timeout=180, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise StepFailed(f"the built {exe.name} could not be run: {exc}") from exc
+    if result.returncode != 0:
+        detail = ((result.stdout or "") + (result.stderr or "")).strip().replace("\n", " / ")
+        raise StepFailed(
+            f"the built {exe.name} does not start (exit {result.returncode}): {detail}"
+        )
+    log("the built executable starts")
 
 
 #: The certificate every released APK must carry, as apksigner prints it.

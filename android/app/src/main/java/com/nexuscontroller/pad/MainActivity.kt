@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -77,6 +78,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             var showHelp by remember { mutableStateOf(false) }
             var showAbout by remember { mutableStateOf(false) }
             var globalToastMessage by remember { mutableStateOf<String?>(null) }
+
+            // Updating, for the app rather than for the About screen: the check
+            // runs once here, the menu offers what it finds, and a download is no
+            // longer cancelled by closing the screen it was started from.
+            val updates = rememberUpdateController()
+            LaunchedEffect(Unit) { updates.checkOnStart() }
 
             // ---- settings ----
             var themeMode by remember { mutableStateOf(prefs.getString("theme_mode", "Dark") ?: "Dark") }
@@ -418,7 +425,20 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 onHelpClick = { showMenu = false; showHelp = true },
                 onAboutClick = { showMenu = false; showAbout = true },
                 onLayoutsClick = { showMenu = false; showLayoutManager = true },
-                themeMode = themeMode
+                themeMode = themeMode,
+                // Silent unless there is a version to offer or something is
+                // already happening; see UpdateController.
+                updateLabel = when (val status = updates.status) {
+                    is UpdateStatus.Available ->
+                        stringResource(R.string.update_menu_available, status.release.version)
+                    is UpdateStatus.Downloading ->
+                        stringResource(R.string.update_downloading, status.percent)
+                    is UpdateStatus.Installing -> stringResource(R.string.update_installing)
+                    is UpdateStatus.Installed -> stringResource(R.string.update_installed)
+                    else -> null
+                },
+                // The menu deliberately stays open: this is where the progress is.
+                onUpdateClick = { updates.act() }
             )
 
             if (showHelp) {
@@ -429,7 +449,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
             if (showAbout) {
                 Box(modifier = Modifier.zIndex(100f).fillMaxSize()) {
-                    AboutScreen(onBack = { showAbout = false }, themeMode = themeMode)
+                    AboutScreen(
+                        onBack = { showAbout = false },
+                        themeMode = themeMode,
+                        updates = updates
+                    )
                 }
             }
 

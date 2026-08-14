@@ -104,6 +104,33 @@ def make_icon() -> Path | None:
     return target
 
 
+def selftest(produced: Path) -> bool:
+    """Run the executable that was just built, and require it to start.
+
+    Nothing else in this project ever ran the artefact. Four releases went out
+    before a bundle that could not import its own GUI backend was noticed — by a
+    user, from a dialog — because every test runs from the source tree, where the
+    pieces PyInstaller has to be told about are simply present.
+
+    ``--selftest`` imports the backend and checks the dashboard assets, then
+    exits. No window, so this works on a build runner as well as on a desk.
+    """
+    log("running the built executable to see that it starts")
+    try:
+        result = subprocess.run(
+            [str(produced), "--selftest"], capture_output=True, text=True, timeout=120, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"the built executable could not be run: {exc}")
+        return False
+    output = ((result.stdout or "") + (result.stderr or "")).strip()
+    if result.returncode != 0:
+        log(f"the built executable does not start (exit {result.returncode}): {output}")
+        return False
+    log(output.splitlines()[0] if output else "selftest ok")
+    return True
+
+
 def build(driver: Path | None, icon: Path | None) -> int:
     separator = ";" if sys.platform == "win32" else ":"
     command = [
@@ -117,6 +144,14 @@ def build(driver: Path | None, icon: Path | None) -> int:
         # forget the next time this one changes.
         "--add-data", f"{ROOT / 'docs' / 'logo.png'}{separator}web",
         "--collect-all", "vgamepad",
+        # Not left to PyInstaller's hook. pywebview puts three native runtime
+        # folders on PATH when it imports its WinForms backend — including
+        # win-arm64, on an x64 machine — and a bundle missing any of them dies at
+        # import with "Cannot find win-arm64", before a line of this app runs.
+        # The suite cannot see that: it runs from the source tree, where those
+        # folders are simply there. `--selftest` on the built exe is the other
+        # half of this (see build_release.py).
+        "--collect-all", "webview",
         "--hidden-import", "pynput.keyboard._win32",
         "--hidden-import", "pynput.mouse._win32",
         # pystray picks its backend at import time, by trying them in turn —
@@ -139,6 +174,9 @@ def build(driver: Path | None, icon: Path | None) -> int:
     produced = ROOT / "dist" / ("NexusController.exe" if sys.platform == "win32" else "NexusController")
     if not produced.is_file():
         log("PyInstaller reported success but produced no executable")
+        return 1
+
+    if not selftest(produced):
         return 1
 
     digest = hashlib.sha256(produced.read_bytes()).hexdigest()

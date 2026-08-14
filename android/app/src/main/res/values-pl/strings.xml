@@ -184,5 +184,6 @@
     <string name="update_installing">INSTALOWANIE…</string>
     <string name="update_up_to_date">To najnowsza wersja.</string>
     <string name="update_installed">Aktualizacja zainstalowana.</string>
+    <string name="update_menu_available">Zaktualizuj do %1$s</string>
     <string name="update_needs_permission">Android potrzebuje zgody na instalowanie aplikacji z Nexus Controller. Dotknij, aby otworzyć to ustawienie, potem wróć tutaj.</string>
 </resources>

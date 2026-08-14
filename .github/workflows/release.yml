@@ -71,6 +71,15 @@ jobs:
       - name: Build the executable
         run: python tools/build_exe.py
 
+      # Again, here, on the artefact that is about to be uploaded. build_exe.py
+      # runs this too, but the thing being released is this file — and until a
+      # user's crash dialog said otherwise, nothing had ever started it.
+      - name: Check that it starts
+        run: |
+          dist\NexusController.exe --selftest
+          if ($LASTEXITCODE -ne 0) { throw "the built executable does not start" }
+        shell: pwsh
+
       - uses: actions/upload-artifact@v4
         with:
           name: NexusController-windows

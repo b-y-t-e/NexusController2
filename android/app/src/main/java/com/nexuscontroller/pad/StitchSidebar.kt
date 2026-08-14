@@ -46,7 +46,10 @@ fun StitchSidebar(
     onHelpClick: () -> Unit, 
     onAboutClick: () -> Unit,
     onLayoutsClick: () -> Unit, // Added for Custom Layouts
-    themeMode: String 
+    themeMode: String,
+    /** Null while there is nothing to offer — see the entry below. */
+    updateLabel: String? = null,
+    onUpdateClick: () -> Unit = {}
 ) {
     val accentPrimary = Color(0xFF0d59f2)
     val backgroundDark = Color(0xFF151921)
@@ -138,6 +141,17 @@ fun StitchSidebar(
 
                     SectionLabel(stringResource(R.string.section_system), contentColor)
                     
+                    // Only when there is something to say. A new version is the
+                    // one piece of news worth putting in front of somebody who
+                    // came here to play, and it goes no further than a line in
+                    // this menu — no dialog, nothing that interrupts a game.
+                    // The menu stays open while it downloads: the progress is
+                    // written here, and closing it would leave the tap looking
+                    // like it did nothing.
+                    if (updateLabel != null) {
+                        SystemItem(updateLabel, Icons.Rounded.Update, accentPrimary, onUpdateClick)
+                    }
+
                     SystemItem(stringResource(R.string.action_settings), Icons.Rounded.Settings, contentColor) {
                         onSettingsClick()
                         onDismiss()

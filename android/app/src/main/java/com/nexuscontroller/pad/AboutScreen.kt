@@ -44,48 +44,21 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import kotlinx.coroutines.launch
 
 @Composable
 fun AboutScreen(
     onBack: () -> Unit,
-    themeMode: String
+    themeMode: String,
+    updates: UpdateController
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
     val isLight = themeMode == "Light"
 
-    // Updating, from this screen only. The check runs when the screen opens and
-    // says nothing when there is nothing to say — an app for playing games in
-    // the same room as the PC has no business interrupting anyone about a point
-    // release.
-    val scope = rememberCoroutineScope()
-    val updater = remember { Updater(context) }
-    var updateStatus by remember { mutableStateOf<UpdateStatus>(UpdateStatus.Idle) }
-    // Who may write updateStatus, and when. The rule itself is in
-    // UpdateScreenState, where it is tested; this screen only obeys it.
-    val screen = remember { UpdateScreenState() }
-    DisposableEffect(Unit) {
-        // The confirmation dialog belongs to the system installer, so the outcome
-        // comes back through a broadcast rather than from the call. attach(), not
-        // a plain assignment: a result landing while no screen is registered
-        // waits for the next one instead of being dropped.
-        val listener: (UpdateStatus) -> Unit = { status ->
-            screen.fromInstaller()
-            updateStatus = status
-        }
-        InstallResultReceiver.attach(listener)
-        onDispose { InstallResultReceiver.detach(listener) }
-    }
-    LaunchedEffect(Unit) {
-        // attach() runs first — DisposableEffect is applied before this coroutine
-        // is dispatched — so anything waiting has already arrived by here.
-        if (!screen.fromWork()) return@LaunchedEffect
-        updateStatus = UpdateStatus.Checking
-        val result = updater.check(BuildConfig.VERSION_NAME, BuildConfig.FLAVOR)
-        // And once more for a result that landed while the check was in flight.
-        if (screen.fromWork()) updateStatus = result
-    }
-    
+    // Updating belongs to the activity now, not to this screen: the app checks
+    // once when it starts, the main menu offers what it finds, and a download
+    // outlives the screen it was started from. This one only reads the state and
+    // taps the same single decision — see UpdateController.act().
+    val updateStatus = updates.status
+
     // Theme Colors matching the HTML/Tailwind design
     val primaryColor = Color(0xFF0d59f2) // "primary": "#0d59f2"
     val backgroundDark = Color(0xFF0a0e14) // "background-dark": "#0a0e14"
@@ -278,44 +251,10 @@ fun AboutScreen(
                     // a button that promised to do something and did nothing.
                     // It now does it: checks, and once there is something to
                     // install, installs it.
-                    .clickable(enabled = updateStatus.isActionable()) {
-                        val available = updateStatus as? UpdateStatus.Available
-                        when {
-                            available == null -> scope.launch {
-                                // Asked for by hand, so the outcome on screen is
-                                // the one being replaced on purpose.
-                                screen.userAsked()
-                                updateStatus = UpdateStatus.Checking
-                                val result = updater.check(
-                                    BuildConfig.VERSION_NAME, BuildConfig.FLAVOR
-                                )
-                                if (screen.fromWork()) updateStatus = result
-                            }
-                            // Asked for once, in Settings, and not by us — from
-                            // Android 8 this permission cannot be requested with
-                            // a dialog. Sending the user there is the whole of
-                            // what an app may do about it.
-                            !updater.canInstallPackages() -> updater.openInstallPermissionSettings()
-                            else -> scope.launch {
-                                screen.userAsked()
-                                updateStatus = UpdateStatus.Downloading(0)
-                                val result = updater.downloadAndInstall(
-                                    available.release, BuildConfig.FLAVOR
-                                ) { percent ->
-                                    if (screen.fromWork()) {
-                                        updateStatus = UpdateStatus.Downloading(percent)
-                                    }
-                                }
-                                // The broadcast can beat this line: downloadAndInstall
-                                // returns "Installing" once the session is committed,
-                                // and the user's answer to the system's dialog — "no",
-                                // most of the time — arrives through the receiver
-                                // meanwhile. Assigning over it put "Installing…" back
-                                // on screen with nothing left to change it.
-                                if (screen.fromWork()) updateStatus = result
-                            }
-                        }
-                    }
+                    // Check, ask for the install permission, or install: one
+                    // decision, written once, in UpdateController.act() — the
+                    // entry in the main menu presses the same one.
+                    .clickable(enabled = updateStatus.isActionable()) { updates.act() }
                     .padding(horizontal = 40.dp, vertical = 16.dp)
                     .shadow(15.dp, spotColor = primaryColor.copy(alpha = 0.4f)) // Neon Shadow
             ) {
@@ -354,7 +293,7 @@ fun AboutScreen(
                 is UpdateStatus.Installed -> stringResource(R.string.update_installed)
                 is UpdateStatus.Failed -> status.message
                 is UpdateStatus.Available ->
-                    if (updater.canInstallPackages()) null
+                    if (updates.canInstallPackages()) null
                     else stringResource(R.string.update_needs_permission)
                 else -> null
             }
@@ -377,7 +316,7 @@ fun AboutScreen(
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.sp,
                 modifier = Modifier
-                    .clickable { updater.openReleasesPage() }
+                    .clickable { updates.openReleasesPage() }
                     .padding(8.dp)
             )
             

@@ -398,6 +398,13 @@ class TestTheWorkflowAgrees:
         assert "NEXUS_KEYSTORE_BASE64" in self.WORKFLOW
         assert "verify_signatures" in self.WORKFLOW
 
+    def test_the_workflow_runs_the_executable_it_is_about_to_publish(self):
+        """Four releases shipped a build nobody had ever started; the fifth was
+        the one a user could not open. The suites cannot catch it — they run from
+        the source tree, where what PyInstaller has to be told about is present
+        anyway — so the check has to be the artefact itself."""
+        assert "--selftest" in self.WORKFLOW
+
     def test_the_workflow_checks_signatures_with_this_script_not_its_own_copy(self):
         """One pin, and one parser to read it with.
 
