@@ -74,11 +74,19 @@ jobs:
       # Again, here, on the artefact that is about to be uploaded. build_exe.py
       # runs this too, but the thing being released is this file — and until a
       # user's crash dialog said otherwise, nothing had ever started it.
+      #
+      # Through build_release.py rather than by running the exe from the shell,
+      # for one reason and one lesson. The reason is the rule this repository
+      # already applies to signature checking: one implementation, called from
+      # both places, instead of a second copy in YAML. The lesson is that the
+      # copy in YAML was already wrong — the app is built --windowed, so a
+      # console does not wait for it, and $LASTEXITCODE was read before the
+      # process had even started. The step failed while the executable it was
+      # testing printed "selftest ok" two seconds later.
       - name: Check that it starts
-        run: |
-          dist\NexusController.exe --selftest
-          if ($LASTEXITCODE -ne 0) { throw "the built executable does not start" }
-        shell: pwsh
+        run: >
+          python -c "import pathlib, build_release;
+          build_release.verify_it_starts(pathlib.Path('dist/NexusController.exe'))"
 
       - uses: actions/upload-artifact@v4
         with:

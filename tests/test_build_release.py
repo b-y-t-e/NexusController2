@@ -402,8 +402,15 @@ class TestTheWorkflowAgrees:
         """Four releases shipped a build nobody had ever started; the fifth was
         the one a user could not open. The suites cannot catch it — they run from
         the source tree, where what PyInstaller has to be told about is present
-        anyway — so the check has to be the artefact itself."""
-        assert "--selftest" in self.WORKFLOW
+        anyway — so the check has to be the artefact itself.
+
+        And it runs through this script, like the signature check: the shell
+        version of it was wrong on the first try, because a --windowed build does
+        not hold the console and $LASTEXITCODE was read before the process
+        started.
+        """
+        assert "verify_it_starts" in self.WORKFLOW
+        assert "dist\\NexusController.exe --selftest" not in self.WORKFLOW
 
     def test_the_workflow_checks_signatures_with_this_script_not_its_own_copy(self):
         """One pin, and one parser to read it with.
