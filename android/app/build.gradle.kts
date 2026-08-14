@@ -76,8 +76,8 @@ android {
         applicationId = "com.nexuscontroller.pad"
         minSdk = 28
         targetSdk = 34
-        versionCode = 20001
-        versionName = "2.0.1"
+        versionCode = 20002
+        versionName = "2.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
