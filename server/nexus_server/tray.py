@@ -118,10 +118,12 @@ class Tray:
         *,
         on_open: Callable[[], None],
         on_quit: Callable[[], None],
+        on_check: Callable[[], None] | None = None,
         image_source: Path | None = None,
     ) -> None:
         self._on_open = on_open
         self._on_quit = on_quit
+        self._on_check = on_check
         self._image_source = image_source
         self._icon = None
         self._thread: threading.Thread | None = None
@@ -151,12 +153,19 @@ class Tray:
         try:
             import pystray  # noqa: PLC0415
 
-            menu = pystray.Menu(
+            items = [
                 # default=True: this is what a double-click on the icon does,
                 # which is what everyone tries first.
                 pystray.MenuItem("Open dashboard", self._open, default=True),
-                pystray.MenuItem("Quit", self._quit),
-            )
+            ]
+            if self._on_check is not None:
+                # The answer has nowhere to appear in a menu, so this opens the
+                # dashboard as well and lets the banner there say it — the same
+                # place the automatic check reports to, rather than a second way
+                # of telling the user the same news.
+                items.append(pystray.MenuItem("Check for updates", self._check))
+            items.append(pystray.MenuItem("Quit", self._quit))
+            menu = pystray.Menu(*items)
             self._icon = pystray.Icon(
                 "nexus-controller", load_image(self._image_source), TITLE, menu
             )
@@ -223,6 +232,10 @@ class Tray:
 
     def _quit(self, *_args) -> None:
         self._call(self._on_quit, "quitting")
+
+    def _check(self, *_args) -> None:
+        if self._on_check is not None:
+            self._call(self._on_check, "checking for updates")
 
     def _call(self, action: Callable[[], None], what: str) -> None:
         # These run on pystray's thread and reach into the UI. An exception here

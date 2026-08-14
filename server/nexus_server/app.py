@@ -1018,6 +1018,15 @@ def run_gui(simulate: bool = False, *, minimized: bool = False) -> int:
     def quit_app() -> None:
         api.quit()
 
+    def check_for_update() -> None:
+        # The window first, because the answer appears in the dashboard's banner
+        # and a menu item that starts something invisible has told the user
+        # nothing. check_for_update() also decides whether a check runs at all —
+        # one already running, an installed update waiting for a restart — and
+        # the page is where that is said, rather than here in silence.
+        show_window()
+        api.check_for_update()
+
     # From here on there is something to clean up whatever happens: an icon on a
     # thread, and a server the page may have started. create_window() is inside
     # this on purpose — it can fail (a missing WebView2 runtime is the usual
@@ -1027,6 +1036,7 @@ def run_gui(simulate: bool = False, *, minimized: bool = False) -> int:
         api._tray = tray.Tray(
             on_open=show_window,
             on_quit=quit_app,
+            on_check=check_for_update,
             image_source=_tray_image_source(),
         )
         if api._tray.start():

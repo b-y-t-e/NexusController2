@@ -97,6 +97,7 @@ class FakePystray:
         class Icon:
             def __init__(self, name, image, title, menu):
                 self.visible = False
+                self.menu = menu
                 outer.icon = self
 
             def run(self, setup=None):
@@ -162,6 +163,36 @@ class TestStarting:
     def test_an_icon_that_cannot_show_itself_is_a_no_too(self, monkeypatch):
         icon = self._with(monkeypatch, FakePystray("cannot-show"))
         assert icon.start() is False
+
+    def test_the_menu_offers_a_check_when_there_is_one_to_offer(self, monkeypatch):
+        """Right-click is where a windowless app is reachable from, and the
+        update check is the one thing there that is not about the window."""
+        fake = FakePystray("works")
+        asked = []
+        monkeypatch.setitem(sys.modules, "pystray", fake)
+        icon = tray.Tray(
+            on_open=lambda: None, on_quit=lambda: None, on_check=lambda: asked.append(1)
+        )
+        try:
+            assert icon.start() is True
+            labels = [label for label, _action in fake.icon.menu]
+            assert labels == ["Open dashboard", "Check for updates", "Quit"]
+            icon._check()
+            assert asked == [1]
+        finally:
+            icon.stop()
+
+    def test_and_leaves_it_out_when_there_is_not(self, monkeypatch):
+        """run_headless has no dashboard for an answer to appear in."""
+        fake = FakePystray("works")
+        monkeypatch.setitem(sys.modules, "pystray", fake)
+        icon = tray.Tray(on_open=lambda: None, on_quit=lambda: None)
+        try:
+            icon.start()
+            assert [label for label, _ in fake.icon.menu] == ["Open dashboard", "Quit"]
+            icon._check()       # must not raise either
+        finally:
+            icon.stop()
 
     def test_a_tray_that_gives_up_later_stops_being_running(self, monkeypatch):
         """run() returns when the backend's loop does, which a session ending can
