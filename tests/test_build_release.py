@@ -148,6 +148,80 @@ class TestApkBuilds:
         assert "--no-build-cache" in calls[0]
 
 
+class TestReadingApksigner:
+    """Which line of ``apksigner verify --print-certs`` is the certificate.
+
+    The tool prints several digests for one signer and a set of them for every
+    further signer, so the parser has to be anchored — and it has to know both
+    shapes of the signer line, because the same tool on the same APK prints the
+    ranged one whenever the signers are not identical across every API level the
+    APK supports. The first tagged release died on that difference between a
+    laptop and a runner.
+    """
+
+    CERT = "13288e7aad983ddcb4e06a48862e1bbf3efcc7c3c76a613f2cec7c5d68c72feb"
+    OTHER = "a" * 64
+
+    def _tool(self, monkeypatch, stdout, returncode=0):
+        def fake_run(command, **kwargs):
+            return subprocess.CompletedProcess(command, returncode, stdout, "")
+
+        monkeypatch.setattr(br.subprocess, "run", fake_run)
+        return br.Path("apksigner")
+
+    def test_the_plain_form(self, tmp_path, monkeypatch):
+        tool = self._tool(monkeypatch, (
+            "Signer #1 certificate DN: CN=Nexus Controller\n"
+            f"Signer #1 certificate SHA-256 digest: {self.CERT}\n"
+            "Signer #1 certificate SHA-1 digest: c0ad97494a40e6e035c3327e7b3f7e7b4f8e9242\n"
+            f"Signer #1 public key SHA-256 digest: {self.OTHER}\n"
+        ))
+        assert br.certificate_of(tmp_path / "x.apk", tool) == self.CERT
+
+    def test_the_form_with_api_ranges(self, tmp_path, monkeypatch):
+        """One signer, described once per range. Same key, so same answer."""
+        tool = self._tool(monkeypatch, (
+            f"Signer (minSdkVersion=21, maxSdkVersion=23) #1 certificate SHA-256 digest: {self.CERT}\n"
+            f"Signer (minSdkVersion=24, maxSdkVersion=2147483647) #1 certificate SHA-256 digest: {self.CERT}\n"
+        ))
+        assert br.certificate_of(tmp_path / "x.apk", tool) == self.CERT
+
+    def test_two_keys_across_ranges_is_refused(self, tmp_path, monkeypatch):
+        """Half the phones would take the update and the other half refuse it."""
+        tool = self._tool(monkeypatch, (
+            f"Signer (minSdkVersion=21, maxSdkVersion=23) #1 certificate SHA-256 digest: {self.CERT}\n"
+            f"Signer (minSdkVersion=24, maxSdkVersion=2147483647) #1 certificate SHA-256 digest: {self.OTHER}\n"
+        ))
+        with pytest.raises(br.StepFailed, match="more than one certificate"):
+            br.certificate_of(tmp_path / "x.apk", tool)
+
+    def test_the_public_key_is_not_the_certificate(self, tmp_path, monkeypatch):
+        """It is printed first for every signer and is a different digest."""
+        tool = self._tool(monkeypatch, f"Signer #1 public key SHA-256 digest: {self.OTHER}\n")
+        with pytest.raises(br.StepFailed):
+            br.certificate_of(tmp_path / "x.apk", tool)
+
+    def test_a_second_signer_is_not_read_as_the_first(self, tmp_path, monkeypatch):
+        tool = self._tool(monkeypatch, (
+            f"Signer #1 certificate SHA-256 digest: {self.CERT}\n"
+            f"Signer #2 certificate SHA-256 digest: {self.OTHER}\n"
+        ))
+        assert br.certificate_of(tmp_path / "x.apk", tool) == self.CERT
+
+    def test_nothing_recognisable_quotes_the_tool(self, tmp_path, monkeypatch):
+        """"It may not be signed at all" was a guess, and when it was wrong it
+        sent the reader to look at the signing config for a signature that was
+        there — the tool's own words are the thing that shortens that."""
+        tool = self._tool(monkeypatch, (
+            "Verifies\n"
+            "WARNING: META-INF/foo not protected by signature.\n"
+            "Some shape of line nobody has seen yet\n"
+        ))
+        with pytest.raises(br.StepFailed, match="Some shape of line") as caught:
+            br.certificate_of(tmp_path / "x.apk", tool)
+        assert "WARNING" not in str(caught.value), "hundreds of these drown the answer"
+
+
 class TestCollect:
     def test_checksums_cover_what_is_there(self, release_dir, tmp_path):
         source = write(tmp_path / "src" / "NexusController.exe", "payload")

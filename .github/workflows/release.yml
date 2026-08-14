@@ -26,23 +26,39 @@ jobs:
 
       # vgamepad ships as an sdist only, and its setup.py runs `msiexec /i` on
       # the ViGEmBus MSI it carries — *interactively*, whenever the driver is not
-      # already installed. On a runner that dialog has nobody to answer it and
-      # pip waits for ever. So the driver goes in silently first; vgamepad's own
-      # detection then finds it in the registry and installs nothing.
+      # already in the registry. On a runner that dialog has nobody to answer it,
+      # so pip waits for ever: the first tagged build sat here for 52 minutes.
+      # The driver therefore goes in silently before pip runs, and vgamepad's own
+      # detection then finds it and installs nothing.
+      #
+      # The sdist is fetched straight from PyPI rather than with `pip download`,
+      # which was the first attempt and hung in exactly the same way: pip builds
+      # the metadata through setuptools' `dist_info`, and setup.py only skips its
+      # msiexec call for `egg_info` and `sdist`. Nothing here executes any of the
+      # package's code.
       - name: Install ViGEmBus, so vgamepad's own installer stays quiet
         shell: pwsh
+        timeout-minutes: 10
         run: |
+          $ErrorActionPreference = "Stop"
           $work = Join-Path $env:RUNNER_TEMP "vgamepad"
-          # --no-binary/-d only fetches and runs egg_info, which setup.py
-          # explicitly excludes from the msiexec call above.
-          python -m pip download vgamepad --no-deps --no-binary :all: -d $work
-          $sdist = Get-ChildItem "$work\*.tar.gz" | Select-Object -First 1
-          tar -xzf $sdist.FullName -C $work
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          $meta = Invoke-RestMethod "https://pypi.org/pypi/vgamepad/json"
+          $sdist = $meta.urls | Where-Object { $_.packagetype -eq "sdist" } | Select-Object -First 1
+          if (-not $sdist) { throw "vgamepad has no sdist on PyPI" }
+          $archive = Join-Path $work $sdist.filename
+          Invoke-WebRequest $sdist.url -OutFile $archive
+          tar -xzf $archive -C $work
           $msi = Get-ChildItem $work -Recurse -Filter ViGEmBusSetup_x64.msi | Select-Object -First 1
           if (-not $msi) { throw "no ViGEmBus MSI in the vgamepad sdist" }
           $run = Start-Process msiexec -Wait -PassThru `
             -ArgumentList "/i", "`"$($msi.FullName)`"", "/qn", "/norestart"
           if ($run.ExitCode -ne 0) { throw "ViGEmBus install failed with $($run.ExitCode)" }
+          # Checked the way setup.py checks, because that is the only opinion
+          # that decides whether pip stops to ask a question nobody can answer.
+          $found = reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" /s |
+            Select-String -Quiet "Nefarius Virtual Gamepad Emulation Bus Driver"
+          if (-not $found) { throw "ViGEmBus is not in the registry — pip would hang on its installer" }
 
       - name: Install dependencies
         run: |

@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -244,6 +245,26 @@ def apksigner() -> Path:
     )
 
 
+#: The one line in ``apksigner verify --print-certs`` that names the certificate.
+#:
+#: Anchored, and on signer #1 specifically: apksigner also prints the *public
+#: key* digest, the SHA-1 and MD5 of the same certificate, and a line for every
+#: further signer — so a loose "contains a digest" match reads whichever comes
+#: first and calls it the certificate.
+#:
+#: The optional range is the shape that broke the first tagged build. When an
+#: APK's signers are not the same across every API level it supports, apksigner
+#: prints "Signer (minSdkVersion=21, maxSdkVersion=23) #1 certificate …" instead
+#: of a bare "Signer #1 certificate …" — which the same tool, on the same APK,
+#: does not do on a machine where the ranges agree. A release must not turn on
+#: which of the two a runner happens to produce.
+SIGNER_DIGEST = re.compile(
+    r"^Signer\s*(?:\(min[Ss]dk[Vv]ersion=\d+(?:,\s*max[Ss]dk[Vv]ersion=\d+)?\)\s*)?"
+    r"#1 certificate SHA-256 digest:\s*([0-9a-fA-F]{64})\s*$",
+    re.MULTILINE,
+)
+
+
 def certificate_of(apk: Path, tool: Path | None = None) -> str:
     """The SHA-256 digest of the certificate that signed *apk*."""
     tool = tool or apksigner()
@@ -260,22 +281,32 @@ def certificate_of(apk: Path, tool: Path | None = None) -> str:
             f"{apk.name} did not verify (exit {result.returncode}): "
             f"{detail[-1] if detail else 'no output'}"
         )
-    # Anchored on the whole line, and on signer #1 specifically. apksigner also
-    # prints "public key SHA-256 digest", a line for every further signer, and
-    # more of both under v3.1 and a rotation lineage — so a loose "contains"
-    # match reads whichever of those happens to come first and calls it the
-    # certificate. This is the same rule the workflow applies, because the
-    # workflow calls this function.
-    marker = "Signer #1 certificate SHA-256 digest: "
-    for line in result.stdout.splitlines():
-        if line.strip().startswith(marker):
-            digest = line.strip()[len(marker):].strip().lower()
-            if digest:
-                return digest
-    raise StepFailed(
-        f"apksigner printed no certificate digest for {apk.name} — "
-        "it may not be signed at all"
-    )
+    digests = {
+        match.group(1).lower() for match in SIGNER_DIGEST.finditer(result.stdout)
+    }
+    if not digests:
+        # With the tool's own words. "It may not be signed at all" was a guess,
+        # and when it was wrong — a shape of output this did not know — it sent
+        # the reader looking at Gradle's signing config for a signature that was
+        # there all along. The warning lines are dropped: an APK produces
+        # hundreds of "not protected by signature" for files in META-INF.
+        said = [
+            line.strip() for line in result.stdout.splitlines()
+            if line.strip() and not line.startswith("WARNING")
+        ]
+        raise StepFailed(
+            f"apksigner printed no certificate digest for {apk.name}; it said: "
+            + (" / ".join(said[:5]) if said else "nothing at all")
+        )
+    if len(digests) > 1:
+        # Signer #1 under two API ranges is still one signer, so this means the
+        # ranges are signed by different keys — half the phones would take an
+        # update the other half refuse.
+        raise StepFailed(
+            f"{apk.name} is signed by more than one certificate across API "
+            f"levels: {', '.join(sorted(digests))}"
+        )
+    return digests.pop()
 
 
 def verify_signatures(artefacts: list[tuple[Path, str]]) -> None:
