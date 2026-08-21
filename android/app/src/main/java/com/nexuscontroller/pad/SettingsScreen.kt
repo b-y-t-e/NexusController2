@@ -82,6 +82,11 @@ fun SettingsScreen(
     onGyroSensitivityChange: (Float) -> Unit,
     onCalibrateGyro: () -> Unit, // New Param
     onTouchVibrationToggle: (Boolean) -> Unit,
+    /** One line about what this device's vibration hardware can do. */
+    hapticsNote: String,
+    /** False on a device with no motor: there is nothing to test. */
+    hapticsWork: Boolean,
+    onTestHaptics: () -> Unit,
     onGuideHoldToggle: (Boolean) -> Unit,
     onTrackpadButtonsToggle: (Boolean) -> Unit,
     onAutoReconnectToggle: (Boolean) -> Unit,
@@ -153,6 +158,9 @@ fun SettingsScreen(
                     onGyroSensitivityChange = onGyroSensitivityChange,
                     onCalibrateGyro = onCalibrateGyro,
                     onTouchVibrationToggle = onTouchVibrationToggle,
+                    hapticsNote = hapticsNote,
+                    hapticsWork = hapticsWork,
+                    onTestHaptics = onTestHaptics,
                     onGuideHoldToggle = onGuideHoldToggle,
                     onTrackpadButtonsToggle = onTrackpadButtonsToggle,
                     onAutoReconnectToggle = onAutoReconnectToggle,
@@ -342,6 +350,11 @@ fun SettingsContent(
     onGyroSensitivityChange: (Float) -> Unit,
     onCalibrateGyro: () -> Unit, // New Param
     onTouchVibrationToggle: (Boolean) -> Unit,
+    /** One line about what this device's vibration hardware can do. */
+    hapticsNote: String,
+    /** False on a device with no motor: there is nothing to test. */
+    hapticsWork: Boolean,
+    onTestHaptics: () -> Unit,
     onGuideHoldToggle: (Boolean) -> Unit,
     onTrackpadButtonsToggle: (Boolean) -> Unit,
     onAutoReconnectToggle: (Boolean) -> Unit,
@@ -454,6 +467,34 @@ fun SettingsContent(
                 Spacer(modifier = Modifier.height(24.dp))
 
                 SettingsSectionHeader(stringResource(R.string.settings_haptics), contentTextColor)
+                // What this device can actually do, said out loud. A tablet
+                // usually has no motor at all, and two switches that stay on
+                // while nothing ever happens send people looking for a bug in
+                // the PC. "Test" is the other half: one buzz, on demand, so the
+                // answer to "is it this app or my phone" takes a second.
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        hapticsNote,
+                        color = contentTextColor.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (hapticsWork) {
+                        Text(
+                            stringResource(R.string.settings_haptic_test),
+                            color = AppColors.Primary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clickable { onTestHaptics() }
+                                .padding(8.dp)
+                        )
+                    }
+                }
                 SettingsToggleItem(
                     title = stringResource(R.string.settings_haptic_feedback),
                     subtitle = stringResource(R.string.settings_haptic_feedback_hint),

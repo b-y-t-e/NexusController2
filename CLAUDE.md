@@ -138,7 +138,7 @@ and the pywebview UI thread polling `get_state()`.
 **Done** — protocol v2 with token pairing; Xbox/DS4/Buzz emulation; 8 players
 (`protocol.MAX_PLAYERS`; only 4 of them can be XInput-backed — see `xinput.py`);
 rumble; offline dashboard; key bindings; XInput capacity detection; 832 server
-tests + 200 Kotlin tests + hardware smoke test.
+tests + 208 Kotlin tests + hardware smoke test.
 
 **Done, continued** — central configuration (`PROTOCOL.md` §10): live pad preview
 on every player card, drag-and-drop designer, controller-type switch from the PC,
@@ -243,6 +243,18 @@ loses focus — so it falls back for that message only, and says so at most ever
 flick is more than one signed byte, and the whole distance has to leave in one
 call, because if the finger stops there is no next pointer event to carry the
 rest — it would ride out at the start of the next gesture instead.
+
+**Three ways a phone feels nothing**, and none of them raises anything
+(`HapticPlan`, pure, tested): a tablet usually has no motor at all, so the app
+says so instead of keeping a switch that does nothing; many Huawei phones have
+no amplitude control, where a computed `createOneShot(ms, 216)` can produce
+silence — they get `DEFAULT_AMPLITUDE`, and a short tap gets the OEM's own
+`EFFECT_CLICK`, which is the effect a vendor haptics engine actually implements;
+and a vibration sent with **no usage attached** is filed as touch feedback and
+suppressed whenever the user has turned *that* off in system settings, which is
+a different switch from the one in this app. Settings names what the device can
+do and offers a one-tap test, because "is it the app or my phone" should not
+take an afternoon.
 
 Tilt yields to the finger. Both reach the same cursor in trackpad mode, and
 holding a phone to swipe on it tilts the phone, so gyro steering was adding

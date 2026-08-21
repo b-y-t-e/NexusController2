@@ -516,6 +516,18 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     trackpadButtons = it
                     prefs.edit().putBoolean("trackpad_buttons", it).apply()
                 },
+                // Said by the device, not assumed: a tablet usually has no
+                // motor, and many Huawei phones have one that cannot be asked
+                // for a strength. Both were silent failures until now.
+                hapticsNote = stringResource(
+                    when {
+                        !haptics.hasVibrator -> R.string.settings_haptic_none
+                        haptics.hasAmplitudeControl -> R.string.settings_haptic_full
+                        else -> R.string.settings_haptic_fixed
+                    }
+                ),
+                hapticsWork = haptics.hasVibrator,
+                onTestHaptics = { haptics.tap(true, hapticStrength) },
                 onTouchVibrationToggle = {
                     touchVibration = it
                     prefs.edit().putBoolean("touch_vibration", it).apply()

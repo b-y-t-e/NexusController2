@@ -83,6 +83,10 @@
     <string name="settings_keep_awake">Nie wygaszaj ekranu</string>
     <string name="settings_keep_awake_hint">Telefon nie zaśnie w trakcie gry</string>
     <string name="settings_haptics">Wibracje</string>
+    <string name="settings_haptic_test">SPRAWDŹ</string>
+    <string name="settings_haptic_none">To urządzenie nie ma silniczka wibracji — większość tabletów go nie ma.</string>
+    <string name="settings_haptic_fixed">To urządzenie wibruje z jedną, stałą siłą, więc suwak poniżej nie ma czego zmieniać.</string>
+    <string name="settings_haptic_full">To urządzenie obsługuje regulację siły wibracji.</string>
     <string name="settings_haptic_feedback">Wibracja przy dotknięciu</string>
     <string name="settings_haptic_feedback_hint">Reakcja na wciśnięcie przycisku</string>
     <string name="settings_rumble">Wibracje z gry</string>

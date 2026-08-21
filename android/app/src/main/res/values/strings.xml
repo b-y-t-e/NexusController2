@@ -97,6 +97,11 @@
     <string name="settings_keep_awake">Keep Screen On</string>
     <string name="settings_keep_awake_hint">Prevents device from sleeping</string>
     <string name="settings_haptics">Haptics</string>
+    <!-- What the device can do, and a way to find out in one tap. -->
+    <string name="settings_haptic_test">TEST</string>
+    <string name="settings_haptic_none">This device has no vibration motor — most tablets do not.</string>
+    <string name="settings_haptic_fixed">This device vibrates at one fixed strength, so the slider below has nothing to change.</string>
+    <string name="settings_haptic_full">This device supports vibration strength.</string>
     <string name="settings_haptic_feedback">Haptic Feedback</string>
     <string name="settings_haptic_feedback_hint">Vibrate on key press</string>
     <string name="settings_rumble">Rumble (PC Haptics)</string>
